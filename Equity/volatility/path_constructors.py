@@ -1,4 +1,6 @@
 import numpy as np
+from scipy.stats.qmc import Sobol
+from scipy.special import ndtri
 
 
 class BrownianBridge:
@@ -42,6 +44,41 @@ class BrownianBridge:
             if next_empty_idx >= self.number_of_steps:
                 next_empty_idx = 0
 
+    def build_path_matrix(self):
+        # find A such that path = A * normal_variates in the time dimension (identical in underlying and nbr paths dim)
+        A = np.zeros((self.number_of_steps, self.number_of_steps))
+        A[-1, 0] = self.stddev[0]
+        B = np.identity(self.number_of_steps)
+        # product_matrices = []
+        # path[:, -1, :] = self.stddev[0] * normal_variates[:, 0, :]
+        for i in range(self.number_of_steps):
+            next_empty_idx = self.left_index[i]
+            next_existing_idx = self.right_index[i]
+            next_new_idx = self.bridge_index[i]
+            C = np.identity(self.number_of_steps)
+            if next_empty_idx:
+                C[next_new_idx, next_empty_idx-1] = self.left_weight[i]
+                C[next_new_idx, next_existing_idx] = self.right_weight[i]
+                A[next_new_idx, i] = self.stddev[i]
+                """path[:, next_new_idx, :] = self.left_weight[i] * path[:, next_empty_idx - 1, :] + \
+                                           self.right_weight[i] * path[:, next_existing_idx, :] + \
+                                           self.stddev[i] * normal_variates[:, i, :]"""
+            else:
+                C[next_new_idx, next_existing_idx] = self.right_weight[i]
+                A[next_new_idx, i] = self.stddev[i]
+                """path[:, next_new_idx, :] = self.right_weight[i] * path[:, next_existing_idx, :] + self.stddev[
+                    i] * normal_variates[:, i, :]"""
+            # product_matrices.append(C)
+            B = C @ B
+        # product_matrices = product_matrices[::-1]
+        # product_matrices.append(A)
+        # return np.linalg.multi_dot(product_matrices)
+        return B @ A
+
+    def build_path_with_matrix(self, normal_variates, path_matrix):
+        assert normal_variates.shape[1] == self.number_of_steps
+        return path_matrix @ normal_variates
+
     def build_path(self, path, normal_variates):
         # path has shape [nbr_underlyings, nbr_timesteps, nbr_simulations]
         assert normal_variates.shape == path.shape and path.shape[1] == self.number_of_steps
@@ -58,15 +95,34 @@ class BrownianBridge:
 
 
 if __name__ == '__main__':
-    timesteps = 256
+    import time
+    timesteps = 256  # 2**8
     underlyings = 3
-    simulations = 100
+    simulations = 2**16
     bridge = BrownianBridge(timesteps)
     bridge.create_equidistant_frame()
-    randoms = np.random.default_rng().standard_normal(underlyings*timesteps*simulations)
-    randoms = randoms.reshape((underlyings, timesteps, simulations))
-    path = np.zeros_like(randoms)
-    bridge.build_path(path, randoms)
+    start = time.time()
+    path_matrix = bridge.build_path_matrix()
+    end = time.time()
+    print(f"path matrix: {end-start}")
+    randoms = np.random.default_rng(seed=42).standard_normal(underlyings*timesteps*simulations)
+
+    """gen = Sobol(underlyings * timesteps, bits=64, seed=None)
+    nbrs = gen.random_base2(int(np.log2(simulations))).T
+    randoms = ndtri(nbrs)"""
+
+    randoms = np.reshape(randoms, (underlyings, timesteps, simulations), order='C')
+
+    path1 = np.zeros_like(randoms)
+    start = time.time()
+    bridge.build_path(path1, randoms)
+    end = time.time()
+    print(f"build path loop: {end-start}")
+    start = time.time()
+    path2 = bridge.build_path_with_matrix(randoms, path_matrix)
+    end = time.time()
+    print(f"matrix path time: {end-start}")
+    print(np.max(np.abs(path2-path1)))
 
     print("DONE")
 
@@ -74,6 +130,6 @@ if __name__ == '__main__':
 
     for i in range(underlyings):
         for j in range(10):
-            plt.plot(path[i, :, j])
+            plt.plot(path1[i, :, j])
 
     print("DONE Again")
