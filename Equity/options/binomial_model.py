@@ -3,10 +3,10 @@ import numpy as np
 
 
 def payoff(stock_val, strike_val, iscall=True):
-    return max([iscall * (stock_val - strike_val), 0])
+    return max([(stock_val - strike_val), 0]) if iscall else max([(strike_val - stock_val), 0])
 
 
-def binomial_option(nbr_steps, volatility):
+def binomial_option(nbr_steps, volatility, is_call):
     # value option using binomial model
     dt = period / nbr_steps
     sqrt_dt = np.sqrt(dt)
@@ -46,7 +46,7 @@ def binomial_option(nbr_steps, volatility):
     # add option values into the binomial tree, go in reverse order.
     tree_rev = tree.copy()[::-1]  # revert tree order
     for tree in tree_rev[0]:
-        tree.update({'option': payoff(tree['stock'], strike, iscall=True)})  # option payoff (value) at maturity
+        tree.update({'option': payoff(tree['stock'], strike, iscall=is_call)})  # option payoff (value) at maturity
     for i in range(nbr_steps):
         source_trees = tree_rev[i]  # timestep we want to find the option value at
         target_trees = tree_rev[i + 1]  # all positions at t+1 -> required to value option
@@ -64,15 +64,15 @@ def binomial_option(nbr_steps, volatility):
 
 
 if __name__ == "__main__":
-    stock = 100
-    strike = 100
-    rate = 0.05
+    stock = 1000
+    strike = 900
+    rate = 0.01
     period = 1.
-    is_call = 1
+    is_call = False
 
     volatility_range = np.linspace(0.05, 0.8, 25)
     time_steps = 10
-    option_values = [binomial_option(time_steps, vola) for vola in volatility_range]
+    option_values = [binomial_option(time_steps, vola, is_call) for vola in volatility_range]
 
     # part 1
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
@@ -88,7 +88,7 @@ if __name__ == "__main__":
     # part 2
     volatility = 0.2
     step_range = list(range(4, 51))
-    option_values = [binomial_option(steps, volatility) for steps in step_range]
+    option_values = [binomial_option(steps, volatility, is_call) for steps in step_range]
 
     ax[1].plot(step_range, option_values)
     ax[1].scatter(step_range, option_values)
