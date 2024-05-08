@@ -4,7 +4,7 @@ from scipy.stats.qmc import Halton, Sobol
 from scipy.special import ndtri
 import time
 import matplotlib.pyplot as plt
-from volatility.path_constructors import BrownianBridge, build_path_numba
+from volatility.path_constructors import BrownianBridge
 
 
 DAYS_PER_YEAR = 256
@@ -64,7 +64,7 @@ def get_correlated_randoms(corr_mat, n_paths, n_timesteps, method='pseudo'):
 
 
 def generate_gbm_paths(expiry, discount_rate, vols, corr_mat, method='pseudo'):
-    n_paths = int(2**14)
+    n_paths = int(2**16)
     dt = 1 / DAYS_PER_YEAR
     sqrdt = np.sqrt(dt)
     n_timesteps = int(expiry / dt)
@@ -89,12 +89,13 @@ def generate_gbm_paths(expiry, discount_rate, vols, corr_mat, method='pseudo'):
         randoms = get_random_numbers(method='sobol', distr='gauss', dim=nbr_underlyings * n_timesteps, exponent=exponent)
         sobol_rand_time = time.time()
         randoms = randoms.reshape((nbr_underlyings, n_timesteps, n_paths), order='F')
+
         wiener_paths = np.zeros_like(randoms)
-        # brownian_bridge.build_path(wiener_paths, randoms)
-        build_path_numba(
-            brownian_bridge.stddev, brownian_bridge.number_of_steps, brownian_bridge.left_index,
-            brownian_bridge.right_index, brownian_bridge.bridge_index, brownian_bridge.left_weight,
-            brownian_bridge.right_weight, wiener_paths, randoms)
+        brownian_bridge.build_path(wiener_paths, randoms)
+
+        # path_matrix = brownian_bridge.build_path_matrix()
+        # wiener_paths = brownian_bridge.build_path_with_matrix(randoms, path_matrix)
+
         wiener_paths = np.concatenate((np.zeros((nbr_underlyings, 1, n_paths)), wiener_paths), axis=1)
         bridge_full_time = time.time()
         wiener_increments = np.diff(wiener_paths, axis=1)  # these are still independent
@@ -114,7 +115,7 @@ def generate_gbm_paths(expiry, discount_rate, vols, corr_mat, method='pseudo'):
     stock_init = np.ones((n_paths, 1, 3))
     quotient_stock = np.cumproduct(np.concatenate((stock_init, quotient_stock), axis=-2), axis=-2)
     print("Paths generated")
-    quotient_time = time.time() - start
+    quotient_time = time.time()
     print(f"Randoms time: {random_time-start}")
     print(f"full time: {quotient_time-start}")
     if method == 'sobol':
