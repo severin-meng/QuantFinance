@@ -2,7 +2,7 @@ import numpy as np
 from scipy.stats.qmc import Halton, Sobol
 from scipy.stats import norm
 import matplotlib.pyplot as plt
-from volatility.path_constructors import BrownianBridge
+from Equity.monte_carlo.wiener_path_constructors import BrownianBridge
 
 
 def get_random_numbers(exponent=10, dim=5, method='pseudo', distr='gauss', seed=42):

@@ -2,7 +2,7 @@ import numpy as np
 from functools import cached_property, cache
 from copy import deepcopy
 
-from stock_models import EquityPaths, ConstantShortRate, VanillaGBM
+from market_models import EquityPaths, ConstantShortRate, VanillaGBM
 
 DAYS_PER_YEAR = 252
 np.seterr(invalid='raise')
@@ -41,9 +41,6 @@ class Barrier:
         self.is_down_barrier = is_down_barrier
 
 
-# TODO: put paths, vols, correlations, timesteps, timedeltas into separate Paths class
-
-
 class ContinuousWorstDownBarrier(Barrier):
     """ Continuous worst-of down constant barrier monitoring using brownian bridging """
     def __init__(self, barrier_level, observation_end, observation_start=0, include_endpoint=False):
@@ -57,8 +54,7 @@ class ContinuousWorstDownBarrier(Barrier):
         returns array of shape [nbr_paths] containing the probablity that a barrier breach occurred within the
         observation period.
         """
-        # prepend 0 to sampling_times
-        sampling_times = np.concatenate((np.array([0]), paths_info.sampling_times))
+        sampling_times = paths_info.sampling_times
         assert len(paths_info.paths.shape) == 3 and paths_info.paths.shape[1] == sampling_times.shape[0]
         if isinstance(self.barrier_level, np.ndarray):
             assert self.barrier_level.shape[0] == paths_info.paths.shape[0]  # at least one barrier per underlying
@@ -80,9 +76,10 @@ class ContinuousWorstDownBarrier(Barrier):
             observation_paths = paths_info.paths[:, first_time_index:last_time_index, :]  # this always copies the paths
 
         # this has shape [nbr_paths], it is the probability of a single barrier breach during the observation period
-        return self._brownian_bridge(observation_paths, paths_info.vols, paths_info.time_steps, paths_info.corr_mat)
+        return self._brownian_bridge(
+            observation_paths, paths_info.variances, paths_info.time_steps, paths_info.corr_mat)
 
-    def _brownian_bridge(self, paths, volatilities, time_steps, corr_mat, method='frechet'):
+    def _brownian_bridge(self, paths, variances, time_steps, corr_mat):
         """
         returns probability of conditional Brownian motion with scale volatility crossing threshold (downwards)
         between time_stop and time_start conditional on value_start and value_end
@@ -100,20 +97,35 @@ class ContinuousWorstDownBarrier(Barrier):
             guaranteed_knocks = np.any(paths <= self.barrier_level, axis=(0, 1))
         else:
             guaranteed_knocks = np.any(paths >= barrier_level, axis=(0, 1))
-        print(f"Nbr guaranteed knocks: {guaranteed_knocks.sum()}")
+        # print(f"Nbr guaranteed knocks: {guaranteed_knocks.sum()}")
         quotient_paths = np.log(paths[:, :, ~guaranteed_knocks] / self.barrier_level)
 
-        if len(volatilities.shape) == 1:  # constant vols
-            volatilities = volatilities[..., None, None]
-        elif len(volatilities.shape) == 2:  # time dependent vols
-            volatilities = volatilities[:, :-1, None]
-        else:
-            volatilities = volatilities[:, :-1, ~guaranteed_knocks]  # local volatilities
+        if len(variances.shape) == 1:  # constant vols
+            barrier_variances = variances[..., None, None]
+        elif len(variances.shape) == 2:  # time dependent vols
+            # barrier_variances = volatilities[:, :-1, None].copy()  # this is possibly wrong
+            raise NotImplementedError
+        else:  # stochastic vol or local vol
+            # https://www.acenumerics.com/miscellaneous/monte-carlo-pricing-of-continuously-monitored-barrier-options-with-heston
+            # -> use the volatility corresponding to the asset price closer to the barrier
+            # get pairwise index_mask of time step closest to barrier
+            # i.e. search pairwise minima across quotient_paths
+            # this has shape [nbr_underlyings, nbr_time_steps-1, nbr_paths - discrete_knocks.sum()]
+            candidate_variances = variances[:, :, ~guaranteed_knocks]  # only select paths that are not knocked
+
+            time_index = np.where(quotient_paths[:, :-1, :] - quotient_paths[:, 1:, :] > 0,
+                                  np.arange(1, quotient_paths.shape[1])[None, ..., None],
+                                  np.arange(0, quotient_paths.shape[1]-1)[None, ..., None])
+            barrier_variances = np.fromfunction(
+                lambda i, j, k: candidate_variances[i, time_index[i, j, k], k],
+                (quotient_paths.shape[0], quotient_paths.shape[1]-1, quotient_paths.shape[2]), dtype=int)
+            # barrier_variances = 0.5 * (candidate_variances[:, :-1, :] + candidate_variances[:, 1:, :])
 
         # TODO: compare frechet bounds method against copula sampling using stock correlations and a copula
         # marginal barrier cross probability, shape [nbr_underlyings, nbr_times, nbr_paths - discrete_knocks.sum()]
+        # there can be zeros in the barrier variances, there will be a Runtimewarning but the value will be 0 regardless
         marginal_barrier_cross = np.exp(-2 * quotient_paths[:, 1:, :] * quotient_paths[:, :-1, :] / (
-                    volatilities ** 2 * time_steps[None, ..., None]))
+                barrier_variances * time_steps[None, ..., None]))
 
         if paths.shape[0] == 1:
             probability_cross = 1 - np.cumproduct(1-marginal_barrier_cross, axis=1).flatten()
@@ -127,7 +139,7 @@ class ContinuousWorstDownBarrier(Barrier):
             # it follows that  1 - P_L >=  1 - Pr(no knock) = Pr(at least one knock)  >= 1 - P_U
             # since payoff is linear in no knock proba -> use average of upper and lower bounds
             correlation_values = corr_mat[np.triu_indices(corr_mat.shape[0], 1, corr_mat.shape[1])]
-            """if np.all(correlation_values > 0):
+            if np.all(correlation_values > 0):
                 upper = self._frechet_upper_bound(marginal_barrier_cross)
                 lower = self._joint_independent_prob(marginal_barrier_cross)
             elif np.all(correlation_values < 0):
@@ -135,22 +147,18 @@ class ContinuousWorstDownBarrier(Barrier):
                 lower = self._frechet_lower_bound(marginal_barrier_cross)
             else:
                 upper = self._frechet_upper_bound(marginal_barrier_cross)
-                lower = self._frechet_lower_bound(marginal_barrier_cross)"""
-            upper = self._frechet_upper_bound(marginal_barrier_cross)
-            lower = self._frechet_lower_bound(marginal_barrier_cross)
-            mid = self._joint_independent_prob(marginal_barrier_cross)
+                lower = self._frechet_lower_bound(marginal_barrier_cross)
             upper_proba_no_cross = np.prod(upper, axis=0)
             lower_proba_no_cross = np.prod(lower, axis=0)
-            mid_proba_no_cross = np.prod(mid, axis=0)
-            print(f"Upper prob: {1 - np.mean(upper_proba_no_cross)}, mid prob: {1-np.mean(mid_proba_no_cross)}, "
-                  f" lower prob: {1 - np.mean(lower_proba_no_cross)}")
+            """print(f"Upper prob: {1 - np.mean(upper_proba_no_cross)}, mid prob: {1-np.mean(mid_proba_no_cross)}, "
+                  f" lower prob: {1 - np.mean(lower_proba_no_cross)}")"""
             # lower and upper are bounds for the 'no knock' probability
             probability_cross = 1 - 0.5 * (upper_proba_no_cross + lower_proba_no_cross)
 
         barrier_cross_proba = np.empty_like(guaranteed_knocks, dtype=np.float64)
         barrier_cross_proba[guaranteed_knocks] = 1
         barrier_cross_proba[~guaranteed_knocks] = probability_cross
-        print(f"Global barrier cross prob. incl guaranteed ones: {np.mean(barrier_cross_proba)}")
+        # print(f"Global barrier cross prob. incl guaranteed ones: {np.mean(barrier_cross_proba)}")
         return barrier_cross_proba
 
     @staticmethod
@@ -182,8 +190,7 @@ class DiscreteWorstDownBarrier(Barrier):
         returns boolean array of shape [nbr_paths] telling whether a barrier breach occurred within the
         observation period.
         """
-        # prepend 0 to sampling_times
-        sampling_times = np.concatenate((np.array([0]), paths_info.sampling_times))
+        sampling_times = paths_info.sampling_times
         assert len(paths_info.paths.shape) == 3 and paths_info.paths.shape[1] == sampling_times.shape[0]
         if isinstance(self.barrier_level, np.ndarray):
             assert self.barrier_level.shape[0] == paths_info.paths.shape[0]  # at least one barrier per underlying
@@ -208,12 +215,11 @@ class DiscreteAllUpBarrier(Barrier):
             or [nbr_underlyings, sampling_times, nbr_paths]  (local vol)
         returns array of shape [nbr_paths] containing the autocall breach time (np.inf if no breach occurs)
         """
-        assert np.all(np.isin(self.observation_times, paths_info.sampling_times))  # make sure all observation times are sampled
-        # prepend 0 to sampling_times
-        # TODO figure out prepending of 0 to sampling times
-        sampling_times = np.concatenate((np.array([0]), paths_info.sampling_times))
+        # make sure all observation times are sampled
+        assert np.all(np.isin(self.observation_times, paths_info.sampling_times))
         discrete_breaches = np.all(
-            paths_info.paths[:, np.isin(sampling_times, self.observation_times), :] > self.barrier_level, axis=0)
+            paths_info.paths[:, np.isin(paths_info.sampling_times, self.observation_times), :] > self.barrier_level,
+            axis=0)
         is_breached = np.any(discrete_breaches, axis=0)
         first_breach = np.where(is_breached, np.argmax(discrete_breaches, axis=0), -1)
         breach_dates = np.concatenate((self.observation_times, np.array([np.inf])))[first_breach]
@@ -351,10 +357,12 @@ class BRC:
         return self.bond_weight * sum(discounted_coupons) + self.option_weight * option_payoffs
 
     @cache
-    def simulation_times(self, frequency):
+    def simulation_times(self, frequency=None):
         coupon_dates = self.coupon_component.coupon_dates
+        if frequency is None:
+            return np.array(sorted(coupon_dates))
         uniform_knock_in_dates = np.arange(1, int(self.expiry * frequency) + 1) / frequency
-        return np.array(sorted(set(coupon_dates).union(set(uniform_knock_in_dates))))
+        return np.array(sorted({0}.union(set(coupon_dates).union(set(uniform_knock_in_dates)))))
 
 
 class AutocallableBRC:
@@ -404,49 +412,8 @@ class AutocallableBRC:
         return payoffs
 
     @cache
-    def simulation_times(self, frequency):
+    def simulation_times(self, frequency=None):
         return np.array(sorted(set(self.brc.simulation_times(frequency)).union(set(self.autocall_dates))))
-
-
-def autocall_payoff(paths, strike_perc, barrier_perc, autocall_barrier, short_rate_func,
-                    coupon_rate, coupon_freq, autocall_freq, expiry, notional, return_array=False):
-    # paths shape is (nbr_underlyings, nbr_days, nbr_paths)
-
-    coupon_dates = np.arange(1, expiry // coupon_freq + 1) * coupon_freq
-    coupon_payments = coupon_rate * notional * coupon_freq * np.ones(int(expiry // coupon_freq))
-    discounted_coupons = np.array([0] + [short_rate_func.get_discount_factor(time) * coupon_payment
-                                         for time, coupon_payment in zip(coupon_dates, coupon_payments)])
-    # extend discounted coupons by 1 to account for no autocall being index -1
-
-    autocall_observ_dates = np.arange(1, expiry // autocall_freq) * autocall_freq
-    autocall_date_index = (np.rint(autocall_observ_dates * DAYS_PER_YEAR)).astype(np.int32)
-    autocall_observ_and_maturity = np.arange(1, expiry // autocall_freq + 1) * autocall_freq
-
-    autocall_breaches = np.where(np.all(paths[:, autocall_date_index, :] > autocall_barrier, axis=0), 1, 0)
-    # first_autocall is array like [int = autocall_date_index, nbr_simulations]
-    is_autocall_breach = np.any(autocall_breaches, axis=0)
-    first_autocall = np.where(is_autocall_breach, np.argmax(autocall_breaches, axis=0), -1)
-    autocall_date = autocall_observ_and_maturity[first_autocall]  #
-    last_coupon = first_autocall + 1
-
-    coupons_until_autocall = np.cumsum(discounted_coupons)[last_coupon]
-    full_coupons = np.sum(discounted_coupons)
-
-    notional_contribution = notional * short_rate_func.get_discount_factor(autocall_date)
-
-    # daily trigger barrier check
-    is_barrier_knocked = np.any(np.min(paths, axis=0) < barrier_perc, axis=0)
-    worst_of_price = np.min(paths[:, -1, :], axis=0)
-    option_payoff = short_rate_func.get_discount_factor(expiry) * (
-            -notional + notional / strike_perc * np.where(worst_of_price < strike_perc, worst_of_price, strike_perc))
-
-    # payoff = discounted_coupons + notional + option_payoff
-    payoffs = np.where(is_autocall_breach, coupons_until_autocall + notional_contribution,
-                       full_coupons + notional_contribution + np.where(is_barrier_knocked, option_payoff, 0))
-    if return_array:
-        return payoffs
-    price = np.mean(payoffs)
-    return price
 
 
 if __name__ == '__main__':
@@ -475,16 +442,12 @@ if __name__ == '__main__':
                                            1/autocall_freq, coupon_rate, 1/coupon_freq, notional=notional,
                                            knock_in_type='discrete')
     ContinuousAutoCallable = AutocallableBRC(strike_perc, expiry, const_short_rate, barrier_perc, autocall_barrier,
-                                           1/autocall_freq, coupon_rate, 1/coupon_freq, notional=notional,
-                                           knock_in_type='continuous')
+                                             1/autocall_freq, coupon_rate, 1/coupon_freq, notional=notional,
+                                             knock_in_type='continuous')
 
-    path_exponent = 17
-    """
-    payoffs_old = autocall_payoff(gbm_paths.paths, strike_perc, barrier_perc, autocall_barrier, const_short_rate,
-                                  coupon_rate, coupon_freq, autocall_freq, expiry, notional, return_array=True)
-    """
+    path_exponent = 16
 
-    sampling_range = [4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    sampling_range = [4, 8, 16, 32, 64, 128, 256, 512]
     disc_payoffs = []
     cont_payoffs = []
     for sample in sampling_range:
@@ -498,9 +461,9 @@ if __name__ == '__main__':
         time_disc = default_timer()
         payoffs_cont = ContinuousAutoCallable.path_payoff(gbm_paths)
         time_cont = default_timer()
-        print(f"Path sampling for {sample} time steps took {paths_end-start}")
+        """print(f"Path sampling for {sample} time steps took {paths_end-start}")
         print(f"Discrete payoff calculation: {time_disc-paths_end}")
-        print(f"Continuous payoff calculation: {time_cont - time_disc}")
+        print(f"Continuous payoff calculation: {time_cont - time_disc}")"""
         disc_payoffs.append(np.mean(payoffs_disc))
         cont_payoffs.append(np.mean(payoffs_cont))
     print(disc_payoffs)

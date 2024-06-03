@@ -11,13 +11,13 @@ __all__ = ['PathConstructor', 'Incremental', 'SpectralSplit', 'BrownianBridge']
 class PathConstructor:
     def __init__(self, sampling_times: np.ndarray, **kwargs):
         """
-        :param sampling_times: 1D numpy array containing times at which the wiener path is to be sampled.
+        :param sampling_times: 1D numpy array containing times at which the wiener path is to be sampled, including 0.
         """
         assert len(sampling_times.shape) == 1  # array is 1-dimensional
-        assert sampling_times.shape[0] > 1  # for one-step sampling, no path constructor method is required
+        assert sampling_times.shape[0] > 2  # for one-step sampling, no path constructor method is required
         self.sampling_times = sampling_times
-        self.nbr_steps = sampling_times.shape[0]
-        self.time_increments = np.diff(np.concatenate((np.array([0]), self.sampling_times)))
+        self.nbr_steps = sampling_times.shape[0] - 1
+        self.time_increments = np.diff(self.sampling_times)
         self.increment = self.time_increments[0]
         self.is_uniform = np.allclose(self.time_increments, self.increment)
         self.pseudo_square_root = None
@@ -68,7 +68,7 @@ class SpectralSplit(PathConstructor):
         if self.is_uniform:
             return self._calculate_spectral_split_matrix_uniform()
         covariance = np.fromfunction(
-            lambda i, j: np.array([self.sampling_times[i], self.sampling_times[j]]).min(axis=0),
+            lambda i, j: np.array([self.sampling_times[i+1], self.sampling_times[j+1]]).min(axis=0),
             (self.nbr_steps, self.nbr_steps), dtype=int)
         eig_val, eig_vec = np.linalg.eigh(covariance)
         self.pseudo_square_root = eig_vec[:, ::-1] @ np.diag(np.sqrt(eig_val[::-1]))  # in decreasing eigenvalue order
@@ -95,6 +95,11 @@ class SpectralSplit(PathConstructor):
 
 class BrownianBridge(PathConstructor):
     def __init__(self, sampling_times: np.ndarray, use_matrix=True):
+        """
+        use_matrix: There is no general answer to which method is faster (given the bridge is constructed from scratch).
+        For large number of simulations but small time steps, use_matrix=True can provide significant speedups
+        (i.e. <= 250 sampling times, > 2**14 paths), but for high number of sampling times it becomes painfully slow.
+        """
         super().__init__(sampling_times)
         self.left_index = np.zeros(self.nbr_steps, dtype=int)  # left side point used in construction
         self.right_index = np.zeros(self.nbr_steps, dtype=int)  # right side point used in construction
@@ -130,17 +135,16 @@ class BrownianBridge(PathConstructor):
                 next_existing_idx += 1
             next_new_idx = next_empty_idx + (next_existing_idx - 1 - next_empty_idx) // 2
             # next_new_idx is now the index of the point to be constructed next.
-            point_map[next_new_idx] = i
+            point_map[next_new_idx] = i + 1
             self.bridge_index[i] = next_new_idx
             self.left_index[i] = next_empty_idx
             self.right_index[i] = next_existing_idx
-            self.left_weight[i] = (self.sampling_times[next_existing_idx] - self.sampling_times[next_new_idx]) / (
-                    self.sampling_times[next_existing_idx] - self.sampling_times[next_empty_idx-1])
-            # self.right_weight[i] = (next_new_idx + 1 - next_empty_idx) / (next_existing_idx + 1 - next_empty_idx)
-            self.right_weight[i] = 1 - self.left_weight[i]  # this should be faster
-            self.stddev[i] = np.sqrt(((self.sampling_times[next_new_idx] - self.sampling_times[next_empty_idx-1]) * (
-                    self.sampling_times[next_existing_idx] - self.sampling_times[next_new_idx])) / (
-                    self.sampling_times[next_existing_idx] - self.sampling_times[next_empty_idx-1]))
+            delta_t = self.sampling_times[next_existing_idx+1] - self.sampling_times[next_empty_idx]
+            self.left_weight[i] = (self.sampling_times[next_existing_idx+1] - self.sampling_times[next_new_idx+1]
+                                   ) / delta_t
+            self.right_weight[i] = 1 - self.left_weight[i]
+            self.stddev[i] = np.sqrt(((self.sampling_times[next_new_idx+1] - self.sampling_times[next_empty_idx]) * (
+                    self.sampling_times[next_existing_idx+1] - self.sampling_times[next_new_idx+1])) / delta_t)
             next_empty_idx = next_existing_idx + 1
             if next_empty_idx >= self.nbr_steps:
                 next_empty_idx = 0
@@ -165,7 +169,7 @@ class BrownianBridge(PathConstructor):
                 next_existing_idx += 1
             next_new_idx = next_empty_idx + (next_existing_idx - 1 - next_empty_idx) // 2
             # next_new_idx is now the index of the point to be constructed next.
-            point_map[next_new_idx] = i
+            point_map[next_new_idx] = i + 1
             self.bridge_index[i] = next_new_idx
             self.left_index[i] = next_empty_idx
             self.right_index[i] = next_existing_idx
@@ -291,13 +295,12 @@ class BrownianBridgeNumba(object):
             self.bridge_index[i] = next_new_idx
             self.left_index[i] = next_empty_idx
             self.right_index[i] = next_existing_idx
-            self.left_weight[i] = (self.sampling_times[next_existing_idx] - self.sampling_times[next_new_idx]) / (
-                    self.sampling_times[next_existing_idx] - self.sampling_times[next_empty_idx-1])
-            # self.right_weight[i] = (next_new_idx + 1 - next_empty_idx) / (next_existing_idx + 1 - next_empty_idx)
-            self.right_weight[i] = 1 - self.left_weight[i]  # this should be faster
-            self.stddev[i] = np.sqrt(((self.sampling_times[next_new_idx] - self.sampling_times[next_empty_idx-1]) * (
-                    self.sampling_times[next_existing_idx] - self.sampling_times[next_new_idx])) / (
-                    self.sampling_times[next_existing_idx] - self.sampling_times[next_empty_idx-1]))
+            delta_t = self.sampling_times[next_existing_idx+1] - self.sampling_times[next_empty_idx]
+            self.left_weight[i] = (self.sampling_times[next_existing_idx+1] - self.sampling_times[next_new_idx+1]
+                                   ) / delta_t
+            self.right_weight[i] = 1 - self.left_weight[i]
+            self.stddev[i] = np.sqrt(((self.sampling_times[next_new_idx+1] - self.sampling_times[next_empty_idx]) * (
+                    self.sampling_times[next_existing_idx+1] - self.sampling_times[next_new_idx+1])) / delta_t)
             next_empty_idx = next_existing_idx + 1
             if next_empty_idx >= self.nbr_steps:
                 next_empty_idx = 0
@@ -373,7 +376,7 @@ if __name__ == '__main__':
     simulations = 2**14
     expiry = 3.0
     dt = expiry / timesteps
-    sampling_times = dt * np.arange(1, timesteps + 1, 1)
+    sampling_times = dt * np.arange(0, timesteps + 1, 1)
     randoms = np.random.default_rng(seed=42).standard_normal(underlyings*timesteps*simulations)
 
     randoms = np.reshape(randoms, (underlyings, timesteps, simulations), order='C')

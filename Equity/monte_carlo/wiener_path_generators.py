@@ -76,7 +76,7 @@ class WienerPathGenerator:
     """ Paths generated are of shape [nbr_underlyings, sampling_times, nbr_paths] """
     def __init__(self, sampling_times: np.ndarray, nbr_underlyings, **kwargs):
         self.sampling_times = sampling_times
-        self.nbr_timesteps = sampling_times.shape[0]
+        self.nbr_timesteps = sampling_times.shape[0] - 1
         self.nbr_underlyings = nbr_underlyings
         self.corr_mat = kwargs.get('correlation')
         if self.corr_mat is None:
@@ -109,7 +109,7 @@ class SobolPathGenerator(WienerPathGenerator):
         self.reshape = getattr(self.path_constructor, 'use_matrix', True)
 
     def get_correlated_increments(self, nbr_paths, correlation_override=None, iid_numbers=None, save=False, reuse=True):
-        if reuse and self.correlated_increments:
+        if reuse and self.correlated_increments is not None:
             return self.correlated_increments
         uncorrelated_increments = self.get_uncorrelated_increments(
             nbr_paths, iid_numbers=iid_numbers, save=False, reuse=reuse)
@@ -119,10 +119,11 @@ class SobolPathGenerator(WienerPathGenerator):
         correlated_increments = self._correlate_increments(uncorrelated_increments)
         if save:
             self.correlated_increments = correlated_increments
+        # TODO: check correlations of this!!!
         return correlated_increments
 
     def get_uncorrelated_increments(self, nbr_paths, iid_numbers=None, save=False, reuse=True):
-        if reuse and self.uncorrelated_increments:
+        if reuse and self.uncorrelated_increments is not None:
             return self.uncorrelated_increments
         if iid_numbers is None:
             iid_numbers = self.num_gen.draw_samples(nbr_paths, distribution='gaussian', reshape=self.reshape)
@@ -150,7 +151,7 @@ class PseudoRandomPathGenerator(WienerPathGenerator):
 
     def get_correlated_increments(self, nbr_paths, correlation_override=None, iid_numbers=None, save=False, reuse=True,
                                   method='direct'):
-        if reuse and self.correlated_increments:
+        if reuse and self.correlated_increments is not None:
             return self.correlated_increments
         if correlation_override:
             self.corr_mat = correlation_override
@@ -168,7 +169,7 @@ class PseudoRandomPathGenerator(WienerPathGenerator):
         return correlated_increments
 
     def get_uncorrelated_increments(self, nbr_paths, iid_numbers=None, save=False, reuse=True):
-        if reuse and self.uncorrelated_increments:
+        if reuse and self.uncorrelated_increments is not None:
             return self.uncorrelated_increments
         if iid_numbers is None:
             iid_numbers = self.num_gen.draw_samples(nbr_paths, 'gaussian')
