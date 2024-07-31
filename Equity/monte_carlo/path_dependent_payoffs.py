@@ -419,17 +419,17 @@ class AutocallableBRC:
 if __name__ == '__main__':
     from wiener_path_generators import PseudoRandomPathGenerator, SobolPathGenerator
     from timeit import default_timer
-    strike_perc = 1.0
-    barrier_perc = 0.8
-    autocall_barrier = 1.2
-    discount_rate = 0.01
-    coupon_rate = 0.058
+    strike_perc = 0.792695078253746
+    barrier_perc = 0.785103440284729
+    autocall_barrier = 0.9628797680139541
+    discount_rate = -0.011309803500771522
+    coupon_rate = 0.09402714550495148
     coupon_freq = 0.25
     autocall_freq = 0.25
-    expiry = 1.0
-    vols = np.array([0.6, 0.4, 0.2])
+    expiry = 1.25
+    vols = np.array([0.06668279357254506, 0.21892812550067903, 0.23095036298036575])
     nbr_underlyings = vols.shape[0]
-    corrs = np.array([0.6, 0.3, 0.4])
+    corrs = np.array([-0.2737681568179663, -0.6046816339561372, 0.45873618255231263])
 
     notional = 1000
     corr_mat = np.array([[1, corrs[0], corrs[1]],
@@ -445,15 +445,16 @@ if __name__ == '__main__':
                                              1/autocall_freq, coupon_rate, 1/coupon_freq, notional=notional,
                                              knock_in_type='continuous')
 
-    path_exponent = 16
+    path_exponent = 10
 
-    sampling_range = [4, 8, 16, 32, 64, 128, 256, 512]
+    # sampling_range = [4, 8, 16, 32, 64, 128, 256, 512]
+    sampling_range = [250]
     disc_payoffs = []
     cont_payoffs = []
     for sample in sampling_range:
         start = default_timer()
         sampling_times = DiscreteAutocallable.simulation_times(sample)
-        path_gen = SobolPathGenerator(sampling_times, nbr_underlyings, correlation=corr_mat, seed=42)
+        path_gen = SobolPathGenerator(sampling_times, nbr_underlyings, correlation=corr_mat, seed=0)
         gbm_model = VanillaGBM(vols, const_short_rate, path_gen)
         gbm_paths = gbm_model.generate_paths(2 ** path_exponent, antithetic_sampling=False)
         paths_end = default_timer()

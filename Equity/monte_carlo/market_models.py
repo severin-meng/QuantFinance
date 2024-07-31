@@ -485,17 +485,18 @@ class HestonQuadraticExponentialMartingaleCorrection(HestonQuadraticExponential)
 
 if __name__ == '__main__':
     from wiener_path_generators import PseudoRandomPathGenerator, SobolPathGenerator
-    strike_perc = 1.0
-    barrier_perc = 0.8
-    autocall_barrier = 1.2
-    discount_rate = 0.01
-    coupon_rate = 0.058
+
+    strike_perc = 0.792695078253746
+    barrier_perc = 0.785103440284729
+    autocall_barrier = 0.9628797680139541
+    discount_rate = -0.011309803500771522
+    coupon_rate = 0.09402714550495148
     coupon_freq = 0.25
     autocall_freq = 0.25
-    expiry = 1.0
-    vols = np.array([0.01, 0.99, 0.5])
+    expiry = 1.25
+    vols = np.array([0.06668279357254506, 0.21892812550067903, 0.23095036298036575])
     nbr_underlyings = vols.shape[0]
-    corrs = np.array([0.6, 0.3, 0.4])
+    corrs = np.array([-0.2737681568179663, -0.6046816339561372, 0.45873618255231263])
 
     notional = 1000
     corr_mat = np.array([[1, corrs[0], corrs[1]],
@@ -508,11 +509,21 @@ if __name__ == '__main__':
 
     ContinuousAutoCallable = AutocallableBRC(strike_perc, expiry, const_short_rate, barrier_perc, autocall_barrier,
                                              1/autocall_freq, coupon_rate, 1/coupon_freq, notional=notional,
-                                             knock_in_type='continuous')
-    path_exponent = 12
-    sample = 4
+                                             knock_in_type='discrete')
+    path_exponent = 10
+    sample = 250
     sampling_times = ContinuousAutoCallable.simulation_times(sample)
     print(sampling_times)
+
+    path_gen = SobolPathGenerator(
+        sampling_times, nbr_underlyings, correlation=corr_mat, use_matrix=True, scaling='time-scaled', seed=0)
+    gbm_model = VanillaGBM(vols, const_short_rate, path_gen)
+    gbm_paths = gbm_model.generate_paths(2 ** path_exponent, antithetic_sampling=False)
+    sobol_bb_uniform = ContinuousAutoCallable.path_payoff(gbm_paths)
+
+    print(np.mean(sobol_bb_uniform) - notional)
+
+"""    
     path_gen = SobolPathGenerator(sampling_times, nbr_underlyings, correlation=corr_mat, seed=41)
     gbm_model = VanillaGBM(vols, const_short_rate, path_gen)
     gbm_paths = gbm_model.generate_paths(2 ** path_exponent, antithetic_sampling=False, log_paths=False)
@@ -527,3 +538,4 @@ if __name__ == '__main__':
     plt.legend(loc='best')
     plt.show()
 
+"""

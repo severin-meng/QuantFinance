@@ -98,9 +98,14 @@ class WienerPathGenerator:
 class SobolPathGenerator(WienerPathGenerator):
     def __init__(self, sampling_times, nbr_underlyings, correlation=None,
                  path_constructor: Type[PathConstructor] = BrownianBridge, seed=None,
-                 optimization=None, **kwargs):
+                 optimization=None, scaling='uniform', **kwargs):
         super().__init__(sampling_times, nbr_underlyings, correlation=correlation)
-        self.path_constructor = path_constructor(self.sampling_times, **kwargs)
+        self.scaling = scaling
+        if self.scaling == 'uniform':
+            uniform_scale = np.arange(len(self.sampling_times))
+            self.path_constructor = path_constructor(uniform_scale, **kwargs)
+        else:
+            self.path_constructor = path_constructor(self.sampling_times, **kwargs)
         self.num_gen = SobolGenerator(self.nbr_timesteps, self.nbr_underlyings, seed=seed, optimization=optimization)
         eig_vals, eig_vecs = np.linalg.eigh(self.corr_mat)
         self.correlation_sqrt = eig_vecs @ np.diag(np.sqrt(eig_vals))
@@ -128,6 +133,8 @@ class SobolPathGenerator(WienerPathGenerator):
         if iid_numbers is None:
             iid_numbers = self.num_gen.draw_samples(nbr_paths, distribution='gaussian', reshape=self.reshape)
         uncorrelated_increments = self.path_constructor.get_wiener_increments(iid_numbers)
+        if self.scaling == 'uniform':
+            uncorrelated_increments *= np.sqrt(np.diff(self.sampling_times))[None, ..., None]
         if save:
             self.uncorrelated_increments = uncorrelated_increments
         return uncorrelated_increments
@@ -136,6 +143,8 @@ class SobolPathGenerator(WienerPathGenerator):
         return (self.correlation_sqrt @ uncorrelated_increments.transpose(2, 0, 1)).transpose(1, 2, 0)
 
     def get_time_increments(self):
+        if self.scaling == 'uniform':
+            return np.diff(self.sampling_times)
         return self.path_constructor.time_increments
 
 
