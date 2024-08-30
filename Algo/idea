@@ -1,0 +1,25 @@
+The idea is to follow the chandelier exit indicator under some conditions -> momentum strategy
+The chandelier exit indicator can be customised with 2 parameters - ATR length and multiplier.
+Alternative: MACD (moving average convergence divergence)
+
+Trading API
+1. stream new candle sticks (OHLCV) data every minute
+2. update pandas dataframe with new sticks
+3. process data in dataframe
+4. recalculate indicators on new dataframe
+5. check if there is a new buy/sell signal (incl stoploss etc)
+6. send buy/sell order (async?)
+
+
+Market Data API might be part of Trading API
+
+Backtesting.py: Before deployment of trading API, backtest
+Then deploy in paper setting
+
+How much to bet per trade: use kelly criterion
+
+signal generation
+
+stop-loss   ??
+take-profit ??
+

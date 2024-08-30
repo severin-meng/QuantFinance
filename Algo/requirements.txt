@@ -1,0 +1,14 @@
+alpaca-py
+backtesting
+finnhub-python
+lightweight-charts
+openbb
+pandas
+polygon-api-client
+psycopg2-binary
+python-binance
+python-decouple
+requests
+talipp
+websocket-client
+yfinance
