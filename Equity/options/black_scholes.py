@@ -156,6 +156,11 @@ def plot_everything(spot, strike, vol, rate, tte):
     options = BlackScholesVanilla(spots, strike, vol, rate, tte)
     run_plots(spots, options, label="Spot", ref=strike)
 
+    # price vs strike
+    strikes = np.linspace(0.25 * strike, 2 * strike, 100)
+    options = BlackScholesVanilla(spot, strikes, vol, rate, tte)
+    run_plots(spots, options, label="Strike", ref=spot)
+
     # price vs tte
     ttes = np.linspace(1/250, 4*tte, 100)
     options = BlackScholesVanilla(spot, strike, vol, rate, ttes)
