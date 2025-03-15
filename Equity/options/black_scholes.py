@@ -57,6 +57,10 @@ class BlackScholesVanilla:
         self.n1 = ndtr(self.d1)
         self.n2 = ndtr(self.d2)
 
+    @staticmethod
+    def get_type():
+        return 'Vanilla'
+
     def price(self, is_call=True):
         if is_call:
             return self.spot * self.n1 - self.disc_fact * self.strike  * self.n2
@@ -86,6 +90,58 @@ class BlackScholesVanilla:
         return -self.tte * self.strike * self.disc_fact * (1 - self.n2) * 0.01
 
 
+class BlackScholesDigitalCashOrNothing:
+    def __init__(self, spot, strike, vol, rate, tte):
+        self.spot = spot
+        self.strike = strike
+        self.vol = vol
+        self.rate = rate
+        self.tte = tte
+        self.total_vol = self.vol * sqrt(tte)
+        self.disc_fact = exp(-self.rate * self.tte)
+        self.d1 = (log(spot/strike) + (rate + vol**2/2) * tte) / self.total_vol
+        self.d2 = self.d1 - self.total_vol
+        self.n1 = ndtr(self.d1)
+        self.n2 = ndtr(self.d2)
+        self.deriv_n2d2 = exp(-self.d2**2/2) / sqr_twopi
+
+    @staticmethod
+    def get_type():
+        return 'Digital Cash-Or-Nothing'
+
+    def price(self, is_call=True):
+        if is_call:
+            return self.disc_fact  * self.n2
+        return self.disc_fact * (1 - self.n2)
+
+    def delta(self, is_call=True):
+        if is_call:
+            return 1 / (self.spot * self.total_vol) * self.disc_fact * self.deriv_n2d2
+        return - 1 / (self.spot * self.total_vol) * self.disc_fact * self.deriv_n2d2
+
+    def gamma(self, is_call=True):
+        if is_call:
+            return - self.d1/ (self.spot**2 * self.total_vol**2) * self.disc_fact * self.deriv_n2d2
+        return self.d1/ (self.spot**2 * self.total_vol**2) * self.disc_fact * self.deriv_n2d2
+
+    def theta(self, is_call=True):
+        if is_call:
+            return self.rate * self.disc_fact * self.n2 + self.disc_fact * self.deriv_n2d2 * (self.d1 / (2*self.tte) - self.rate / self.total_vol)
+        return self.rate * self.disc_fact * (1 - self.n2) - self.disc_fact * self.deriv_n2d2 * (self.d1 / (2*self.tte) - self.rate / self.total_vol)
+
+    def vega(self, is_call=True):
+        # vega per percentage point change in volatility
+        if is_call:
+            return (- self.disc_fact * self.deriv_n2d2 * self.d1 / self.vol) * 0.01
+        return (self.disc_fact * self.deriv_n2d2 * self.d1 / self.vol) * 0.01
+
+    def rho(self, is_call=True):
+        # rho per percentage point change in rate
+        if is_call:
+            return (- self.tte * self.disc_fact * self.n2 + self.disc_fact * self.deriv_n2d2 * self.tte / self.total_vol) * 0.01
+        return (- self.tte * self.disc_fact * (1 - self.n2) - self.disc_fact * self.deriv_n2d2 * self.tte / self.total_vol) * 0.01
+
+
 def run_plots(x_variables, options, label="Spot", ref=0):
     call_prices = options.price(is_call=True)
     put_prices = options.price(is_call=False)
@@ -102,7 +158,7 @@ def run_plots(x_variables, options, label="Spot", ref=0):
 
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 10))
-    fig.suptitle(f"Black-Scholes Options & Greeks vs {label}")
+    fig.suptitle(f"Black-Scholes {options.get_type()} Options & Greeks vs {label}")
 
     axes[0, 0].plot(x_variables, call_prices, label='Call')
     axes[0, 0].plot(x_variables, put_prices, label='Put')
@@ -150,32 +206,33 @@ def run_plots(x_variables, options, label="Spot", ref=0):
     plt.show()
 
 
-def plot_everything(spot, strike, vol, rate, tte):
+def plot_everything(spot, strike, vol, rate, tte, option_class):
     # price vs spot
     spots = np.linspace(0.25*spot, 2*spot, 100)
-    options = BlackScholesVanilla(spots, strike, vol, rate, tte)
+    options = option_class(spots, strike, vol, rate, tte)
     run_plots(spots, options, label="Spot", ref=strike)
 
     # price vs strike
     strikes = np.linspace(0.25 * strike, 2 * strike, 100)
-    options = BlackScholesVanilla(spot, strikes, vol, rate, tte)
+    options = option_class(spot, strikes, vol, rate, tte)
     run_plots(spots, options, label="Strike", ref=spot)
 
     # price vs tte
     ttes = np.linspace(1/250, 4*tte, 100)
-    options = BlackScholesVanilla(spot, strike, vol, rate, ttes)
+    options = option_class(spot, strike, vol, rate, ttes)
     run_plots(ttes, options, label="Time-To-Expiry", ref=tte)
 
     # price vs rate
     rates = np.linspace(-rate, 3*rate, 100)
-    options = BlackScholesVanilla(spot, strike, vol, rates, tte)
+    options = option_class(spot, strike, vol, rates, tte)
     run_plots(rates, options, label="Risk-Free Rate", ref=rate)
 
     # price vs vola
     volas = np.linspace(vol*0.2, vol*4, 100)
-    options = BlackScholesVanilla(spot, strike, volas, rate, tte)
+    options = option_class(spot, strike, volas, rate, tte)
     run_plots(volas, options, label="Volatility", ref=vol)
 
 
 if __name__ == '__main__':
-    plot_everything(100, 100, 0.2, 0.02, 1)
+    plot_everything(100, 100, 0.2, 0.02, 1, BlackScholesVanilla)
+    plot_everything(100, 100, 0.2, 0.02, 1, BlackScholesDigitalCashOrNothing)
