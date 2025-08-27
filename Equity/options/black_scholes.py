@@ -3,7 +3,6 @@ This module implements the basic black-scholes-merton vanilla put and call optio
 volatility, constant short rate, no dividends, and geometric brownian motion of the underlying.
 """
 from scipy.special import ndtr
-# from math import sqrt, exp, log, pi
 from numpy import sqrt, exp, log, pi
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,6 +21,45 @@ def bs_call(spot, strike, vol, rate, tte):
     discount_factor = exp(-rate * tte)
     price = spot * ndtr(d1) - strike * discount_factor * ndtr(d2)
     return price
+
+
+def bs_vega(spot, strike, vol, rate, tte):
+    total_vol = vol * sqrt(tte)
+    d1 = (log(spot/strike) + (rate + vol**2/2) * tte) / total_vol
+    return spot * exp(-d1 ** 2 / 2) * sqrt(tte) / sqr_twopi
+
+
+def bs_call_iv(spot, strike, price, rate, tte):
+    # implied vol such that bs_call = price
+    # start with upper and lower IV bounds
+    vol_u = 0.5
+    while bs_call(spot, strike, vol_u, rate, tte) < price:
+        vol_u *= 2
+    vol_d = 0.05
+    while bs_call(spot, strike, vol_d, rate, tte) > price:
+        vol_u /= 2
+
+    # now do bisection: p_u > price > p_d
+    p_u = bs_call(spot, strike, vol_u, rate, tte)
+    p_d = bs_call(spot, strike, vol_d, rate, tte)
+
+    while vol_u - vol_d > 1.e-12:
+        vol_mid = 0.5 * (vol_u + vol_d)
+        p_mid = bs_call(spot, strike, vol_mid, rate, tte)
+        if p_mid > price:
+            vol_u = vol_mid
+            p_u = p_mid
+        else:
+            vol_d = vol_mid
+            p_d = p_mid
+
+    # return linear interpolation
+    # vol axis:   ... vol_d ....  IV    ... vol_u ....
+    # price axis: ... p_d   ....  price ... p_u ...
+    # lin interp: (p_u - p_d) / (vol_u - vol_d) * (IV - vol_d) = price - p_d
+    # solve for IV
+    # IV = (price - p_d) * (vol_u - vol_d) / (p_u - p_d) + vol_d
+    return vol_d + (price - p_d) * (vol_u - vol_d) / (p_u - p_d)
 
 
 def bs_put(spot, strike, vol, rate, tte):
@@ -233,6 +271,18 @@ def plot_everything(spot, strike, vol, rate, tte, option_class):
     run_plots(volas, options, label="Volatility", ref=vol)
 
 
+def plot_payoff(strike):
+    plt.figure()
+    spot_range = np.linspace(40, strike+50, 1000)
+    payoff = np.maximum(spot_range - strike, 0)
+    plt.figure()
+    plt.plot(spot_range, payoff)
+    plt.title("European Call Payoff")
+    plt.show()
+
+
 if __name__ == '__main__':
-    plot_everything(100, 100, 0.2, 0.02, 1, BlackScholesVanilla)
-    plot_everything(100, 100, 0.2, 0.02, 1, BlackScholesDigitalCashOrNothing)
+    # plot_everything(100, 100, 0.2, 0.02, 1, BlackScholesVanilla)
+    # plot_everything(100, 100, 0.2, 0.02, 1, BlackScholesDigitalCashOrNothing)
+    # print(BlackScholesVanilla(np.array([50, 75, 100, 125, 150]), 100, 0.1, 0., 1.).price())
+    plot_payoff(100)
