@@ -181,9 +181,9 @@ class FlexibleForward:
 def value_black_scholes(scheme='implicit'):
     spot = 1.
     strike = 1.
-    rate_d = 0.4
-    rate_f = 0.4  # dividend yield
-    vol = 0.5
+    rate_d = 0.04
+    rate_f = 0.04  # dividend yield
+    vol = 0.2
     tte = 1.
     n_spot = 601
     if scheme == 'explicit':
@@ -237,7 +237,7 @@ def value_black_scholes(scheme='implicit'):
     error_opt = grid[0] - analytical_prices
 
     errors = []
-    theta_range = np.linspace(0.1, 0.8, 10)
+    theta_range = np.linspace(0.1, 0.4, 10)
     for idx, theta in enumerate(theta_range):
         analytical_prices = np.empty_like(spot_axis)
         for idy, s in enumerate(spot_axis):
