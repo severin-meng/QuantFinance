@@ -151,21 +151,29 @@ class FlexibleForward:
     def adjust_result(self, prices, time_idx, spot_axis):
         prices[time_idx] = np.maximum(prices[time_idx], spot_axis - self.strike)
 
-    def analytical_price(self, spot,  vol, rate_d, rate_f, method='Simple'):
-        assert method in ('Simple', 'GJ')
+    def analytical_price(self, spot,  vol, rate_d, rate_f, method='Simple', theta=0.25, lambd=0.0):
+        assert method in ('Simple', 'GJ', 'Severin')
         imm_payoff = spot - self.strike
         fwd_payoff = spot * np.exp(-rate_f * self.tte) - self.strike * np.exp(-rate_d * self.tte)
         if method == 'Simple':
             return max(imm_payoff, fwd_payoff)
         elif method == 'GJ':
-            theta = 0.4258
-            lambd = 0.25
+            # theta = 0.42584
+            # lambd = 0.44867
             adjusted_tte = self.tte * (1 - theta)
             adjusted_strike = self.strike * (1 - np.exp(-rate_d * adjusted_tte)) / (1 - np.exp(-rate_f * adjusted_tte))
             call = EuropeanOption(adjusted_strike, theta * self.tte, is_call=True)
-            call_prc = call.analytical_price(spot, vol, rate_d, 0)
-
+            call_prc = call.analytical_price(spot, vol, rate_d, rate_f)
             return max(imm_payoff, fwd_payoff + (1 - np.exp(-rate_f * adjusted_tte)) * (1 + lambd) * call_prc)
+        elif method == 'Severin':
+            t_theta = self.tte * theta
+            adjusted_tte = self.tte - t_theta
+            fwd_payoff = spot * np.exp(-rate_f * t_theta) - self.strike * np.exp(-rate_d * t_theta)
+            adjusted_strike = self.strike * (1 - np.exp(-rate_d * adjusted_tte)) / (1 - np.exp(-rate_f * adjusted_tte))
+            put = EuropeanOption(adjusted_strike, t_theta, is_call=False)
+            put_prc = put.analytical_price(spot, vol, rate_d, rate_f)
+            return max(imm_payoff, fwd_payoff + (1 - np.exp(-rate_f * adjusted_tte)) * put_prc)
+
         else:
             raise NotImplementedError(f"Method {method} not implemented.")
 
@@ -173,9 +181,9 @@ class FlexibleForward:
 def value_black_scholes(scheme='implicit'):
     spot = 1.
     strike = 1.
-    rate_d = 0.04
-    rate_f = 0.04  # dividend yield
-    vol = 0.2
+    rate_d = 0.4
+    rate_f = 0.4  # dividend yield
+    vol = 0.5
     tte = 1.
     n_spot = 601
     if scheme == 'explicit':
@@ -184,11 +192,11 @@ def value_black_scholes(scheme='implicit'):
         n_time = n_spot
 
     is_call = True
-    plt_min = int(n_spot * 0.2)
-    plt_max = int(n_spot*0.85)
+    plt_min = int(n_spot * 0.5)
+    plt_max = int(n_spot * 0.85)
 
-    prod = EuropeanOption(strike, tte, is_call)
-    # prod = FlexibleForward(strike, tte)
+    # prod = EuropeanOption(strike, tte, is_call)
+    prod = FlexibleForward(strike, tte)
     time_axis = prod.get_time_axis(n_time)
     spot_axis = prod.get_spot_axis(n_spot, spot)
     # computation grid
@@ -219,21 +227,40 @@ def value_black_scholes(scheme='implicit'):
     errors_simple = grid[0] - analytical_prices
     if analytical_prices is not None:
         ax1.plot(spot_axis[plt_min:plt_max], analytical_prices[plt_min:plt_max], label='Analytical Simple', color='green')
+
+    # optimal params
+    # theta = 0.42584
+    # lambd = 0.44867
     analytical_prices = np.empty_like(spot_axis)
-    for idx, s in enumerate(spot_axis):
-        analytical_prices[idx] = prod.analytical_price(s, vol, rate_d, rate_f, method='GJ')
-    errors_gj = grid[0] - analytical_prices
-    if analytical_prices is not None:
-        ax1.plot(spot_axis[plt_min:plt_max], analytical_prices[plt_min:plt_max], label='Analytical GJ', color='cyan')
-    ax1.plot(spot_axis, grid[-1], label='Payoff', color='black')
+    for idy, s in enumerate(spot_axis):
+        analytical_prices[idy] = prod.analytical_price(s, vol, rate_d, rate_f, method='GJ', theta=0.42584, lambd=0.44867)
+    error_opt = grid[0] - analytical_prices
+
+    errors = []
+    theta_range = np.linspace(0.1, 0.8, 10)
+    for idx, theta in enumerate(theta_range):
+        analytical_prices = np.empty_like(spot_axis)
+        for idy, s in enumerate(spot_axis):
+            analytical_prices[idy] = prod.analytical_price(s, vol, rate_d, rate_f, method='GJ', theta=theta)
+        errors.append(grid[0] - analytical_prices)
+        if analytical_prices is not None and idx == 3:
+            ax1.plot(spot_axis[plt_min:plt_max], analytical_prices[plt_min:plt_max], label=fr'GJ $(\theta={theta:.2f})$', color='cyan')
+
+    # ax1.plot(spot_axis, grid[-1], label='Payoff', color='black')
     ax1.legend(loc='upper left')
     ax1.set_xlabel('Spot')
     ax1.set_ylabel('Price')
 
     if errors_simple is not None:
         ax2 = ax1.twinx()
-        ax2.plot(spot_axis[plt_min:plt_max], errors_gj[plt_min:plt_max], label='Error GJ', color="red")
-        ax2.plot(spot_axis[plt_min:plt_max], errors_simple[plt_min:plt_max], label='Error Simple', color="purple")
+        ax2.plot(spot_axis[plt_min:plt_max], errors_simple[plt_min:plt_max], label='2-step', color="gray")
+        ax2.plot(spot_axis[plt_min:plt_max], error_opt[plt_min:plt_max], label=rf'GJ$(\theta, \lambda)$', color="purple")
+        colors = plt.cm.tab10.colors
+        for idx, theta in enumerate(theta_range):
+            err = errors[idx]
+            ax2.plot(spot_axis[plt_min:plt_max], err[plt_min:plt_max], label=rf'GJ $(\theta={theta:.2f})$', color=colors[idx])
+        # ax2.plot(spot_axis[plt_min:plt_max], errors_sev[plt_min:plt_max], label='Error Severin', color="gray")
+
         ax2.set_ylabel("Error")
         ax2.legend(loc='upper right')
     # print(grid[0])
