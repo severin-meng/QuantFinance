@@ -84,6 +84,71 @@ class ImplicitEulerBS(FDMScheme):
         prices[time_idx, 1:-1] = np.linalg.solve(self.matrix, prices[time_idx + 1, 1:-1] - residual_vector)
 
 
+class CrankNicolsonBS(FDMScheme):
+    def __init__(self, time_axis, spot_axis, vol, rate_d, rate_f):
+        """
+        assuming uniform axes
+        """
+        super().__init__(time_axis, spot_axis, vol, rate_d, rate_f)
+        self.model = 'CrankNicolson'
+        self.theta = 0.5  # relative weight of explicit scheme
+        self.expl_matrix, self.impl_matrix, self.lower, self.upper = self.compute_matrix()
+
+    def compute_matrix(self):
+        dt = self.time_axis[1] - self.time_axis[0]
+        n = len(self.spot_axis)
+        n_range = np.arange(1, n - 1)
+
+        a_n = 0.5 * (self.vol ** 2 * n_range ** 2 - (self.rate_d - self.rate_f) * n_range) * dt
+        b_n =  (self.rate_d + self.vol ** 2 * n_range ** 2) * dt
+        c_n = 0.5 * (self.vol ** 2 * n_range ** 2 + (self.rate_d - self.rate_f) * n_range) * dt
+        # explicit part
+        expl_matrix = np.zeros((n - 2, n))  # n-2 rows, n columns: columns are known, rows unknowns
+        expl_matrix[:, :-2] = + np.diag(self.theta * a_n)
+        expl_matrix[:, 1:-1] += np.diag(1 - b_n * self.theta)
+        expl_matrix[:, :-2] = + np.diag(self.theta * c_n)
+
+        # implicit matrix
+        impl_matrix = np.zeros((n - 2, n - 2))
+        impl_matrix += np.diag((1 - self.theta) * -a_n[1:], -1)
+        impl_matrix += np.diag(1 + b_n * (1 - self.theta))
+        impl_matrix += np.diag((1 - self.theta) * -c_n[:-1], 1)
+
+        lower_residual = (1 - self.theta) * -a_n[0]
+        upper_residual = (1 - self.theta) * -c_n[-1]
+
+        return expl_matrix, impl_matrix, lower_residual, upper_residual
+
+    def step_backwards(self, prices, time_idx, omega=0.1, sor=True):
+        residual_vector = np.zeros(prices.shape[1] - 2)
+        residual_vector[0] = prices[time_idx, 0] * self.lower
+        residual_vector[-1] = prices[time_idx, -1] * self.upper
+        rhs = self.expl_matrix @ prices[time_idx + 1] - residual_vector
+        if sor:
+            prices[time_idx, 1:-1] = successive_over_relaxation(self.impl_matrix, rhs, prices[time_idx + 1], omega)
+        else:
+            prices[time_idx, 1:-1] = np.linalg.solve(self.impl_matrix, rhs)
+
+
+def successive_over_relaxation(left_matrix, right_vector, init_guess, omega, error_tolerance=1.e-6):
+    # solve: Ax = b iteratively
+    iter = 0
+    old_sol = init_guess
+    residual = np.linalg.norm(left_matrix @ old_sol - right_vector)
+    print(f"Residual at step {iter} is {residual}")
+    while residual < error_tolerance:
+        new_sol = np.empty_like(old_sol)
+        for i in range(new_sol.shape[0]):
+            new_sol[i] = old_sol[i] * (1 - omega) + omega / left_matrix[i, i] * (right_vector[i] - np.dot(left_matrix[i, :i], new_sol[:i]) - np.dot(left_matrix[i, i+1:], old_sol[i+1:]))
+        old_sol = new_sol
+        # assess error
+        residual = np.linalg.norm(left_matrix @ old_sol - right_vector)
+        iter += 1
+        print(f"Residual at step {iter} is {residual}")
+    print(f"finished after {iter} iterations.")
+    return old_sol
+
+
 class EuropeanOption:
     def __init__(self, strike, tte, is_call):
         self.strike = strike
@@ -152,7 +217,7 @@ class FlexibleForward:
         prices[time_idx] = np.maximum(prices[time_idx], spot_axis - self.strike)
 
     def analytical_price(self, spot,  vol, rate_d, rate_f, method='Simple', theta=0.25, lambd=0.0):
-        assert method in ('Simple', 'GJ', 'Severin')
+        assert method in ('Simple', 'GJ', 'Severin', 'Richardson GJ')
         imm_payoff = spot - self.strike
         fwd_payoff = spot * np.exp(-rate_f * self.tte) - self.strike * np.exp(-rate_d * self.tte)
         if method == 'Simple':
@@ -165,7 +230,26 @@ class FlexibleForward:
             call = EuropeanOption(adjusted_strike, theta * self.tte, is_call=True)
             call_prc = call.analytical_price(spot, vol, rate_d, rate_f)
             return max(imm_payoff, fwd_payoff + (1 - np.exp(-rate_f * adjusted_tte)) * (1 + lambd) * call_prc)
-        elif method == 'Severin':
+        elif method == 'Richardson GJ':
+            adjusted_tte = self.tte * (1 - theta)
+            adjusted_strike = self.strike * (1 - np.exp(-rate_d * adjusted_tte)) / (1 - np.exp(-rate_f * adjusted_tte))
+            call = EuropeanOption(adjusted_strike, theta * self.tte, is_call=True)
+            call_prc = call.analytical_price(spot, vol, rate_d, rate_f)
+            three_step = max(imm_payoff, fwd_payoff + (1 - np.exp(-rate_f * adjusted_tte)) * call_prc)
+            two_step = max(imm_payoff, fwd_payoff)
+            one_step = fwd_payoff
+            no_step = spot - self.strike
+            # return three_step + 3.5 * (three_step - two_step) - 0.5 * (two_step - one_step)
+            return three_step + lambd * (three_step - two_step) + lambd/2 * (two_step - one_step)
+        # S-K < Vfwd + opt -> Vfwd * opt * (1 + lambd)
+        # S-K > Vfwd + opt -> then this is S-K * (1 + lambd) - lambd * Vfd
+        # want: S-K > Vfwd + (1 + lambd)*opt -> S-K
+        
+        
+        # want: If S-K > Vfwd + (1 + lambd) * opt -> S-K, i.e. cancel the Vfwd
+        # max(S-K, Vfwd + (1+lambd)*opt) = max(S-K + lambd Vfwd, (1+lambd) (Vfwd + opt)) - lambd Vfwd
+        # (1 + lambd) V3 = {
+        elif method == 'Put':
             t_theta = self.tte * theta
             adjusted_tte = self.tte - t_theta
             fwd_payoff = spot * np.exp(-rate_f * t_theta) - self.strike * np.exp(-rate_d * t_theta)
@@ -224,20 +308,28 @@ def value_black_scholes(scheme='implicit'):
     analytical_prices = np.empty_like(spot_axis)
     for idx, s in enumerate(spot_axis):
         analytical_prices[idx] = prod.analytical_price(s, vol, rate_d, rate_f, method='Simple')
-    errors_simple = grid[0] - analytical_prices
+    error_simple = grid[0] - analytical_prices
     if analytical_prices is not None:
         ax1.plot(spot_axis[plt_min:plt_max], analytical_prices[plt_min:plt_max], label='Analytical Simple', color='green')
 
     # optimal params
-    # theta = 0.42584
-    # lambd = 0.44867
+    theta_opt = 0.42584
+    lambd_opt = 0.44867
     analytical_prices = np.empty_like(spot_axis)
     for idy, s in enumerate(spot_axis):
-        analytical_prices[idy] = prod.analytical_price(s, vol, rate_d, rate_f, method='GJ', theta=0.42584, lambd=0.44867)
+        analytical_prices[idy] = prod.analytical_price(s, vol, rate_d, rate_f, method='GJ', theta=theta_opt, lambd=lambd_opt)
     error_opt = grid[0] - analytical_prices
 
+    # optimal params
+    theta_opt = 0.42584
+    lambd_opt = 0.44867
+    analytical_prices = np.empty_like(spot_axis)
+    for idy, s in enumerate(spot_axis):
+        analytical_prices[idy] = prod.analytical_price(s, vol, rate_d, rate_f, method='Richardson GJ', theta=theta_opt, lambd=lambd_opt)
+    error_richardson = grid[0] - analytical_prices
+
     errors = []
-    theta_range = np.linspace(0.1, 0.4, 10)
+    theta_range = np.linspace(0.1, 0.9, 10)
     for idx, theta in enumerate(theta_range):
         analytical_prices = np.empty_like(spot_axis)
         for idy, s in enumerate(spot_axis):
@@ -251,14 +343,18 @@ def value_black_scholes(scheme='implicit'):
     ax1.set_xlabel('Spot')
     ax1.set_ylabel('Price')
 
-    if errors_simple is not None:
+    if error_simple is not None:
         ax2 = ax1.twinx()
-        ax2.plot(spot_axis[plt_min:plt_max], errors_simple[plt_min:plt_max], label='2-step', color="gray")
+        ax2.plot(spot_axis[plt_min:plt_max], error_simple[plt_min:plt_max], label='2-step', color="gray")
         ax2.plot(spot_axis[plt_min:plt_max], error_opt[plt_min:plt_max], label=rf'GJ$(\theta, \lambda)$', color="purple")
-        colors = plt.cm.tab10.colors
+        ax2.plot(spot_axis[plt_min:plt_max], error_richardson[plt_min:plt_max], label=rf'GJ Richardson', color="brown")
+
+        colors = plt.cm.tab20.colors
         for idx, theta in enumerate(theta_range):
-            err = errors[idx]
-            ax2.plot(spot_axis[plt_min:plt_max], err[plt_min:plt_max], label=rf'GJ $(\theta={theta:.2f})$', color=colors[idx])
+            err_diff = error_simple - errors[idx]
+            rel_err_diff = err_diff / errors[idx]
+            rel_err_diff = errors[idx]
+            # ax2.plot(spot_axis[plt_min:plt_max], rel_err_diff[plt_min:plt_max], label=rf'GJ $(\theta={theta:.2f})$', color=colors[idx])
         # ax2.plot(spot_axis[plt_min:plt_max], errors_sev[plt_min:plt_max], label='Error Severin', color="gray")
 
         ax2.set_ylabel("Error")
