@@ -235,12 +235,14 @@ class FlexibleForward:
             adjusted_strike = self.strike * (1 - np.exp(-rate_d * adjusted_tte)) / (1 - np.exp(-rate_f * adjusted_tte))
             call = EuropeanOption(adjusted_strike, theta * self.tte, is_call=True)
             call_prc = call.analytical_price(spot, vol, rate_d, rate_f)
-            three_step = max(imm_payoff, fwd_payoff + (1 - np.exp(-rate_f * adjusted_tte)) * call_prc)
-            two_step = max(imm_payoff, fwd_payoff)
+            three_step = fwd_payoff + (1 - np.exp(-rate_f * adjusted_tte)) * call_prc
+
+            two_step = fwd_payoff
             one_step = fwd_payoff
             no_step = spot - self.strike
+            return max(imm_payoff, three_step + lambd * (three_step - two_step))
             # return three_step + 3.5 * (three_step - two_step) - 0.5 * (two_step - one_step)
-            return three_step + lambd * (three_step - two_step) + lambd/2 * (two_step - one_step)
+            # return three_step + lambd * (three_step - two_step) # + lambd/2 * (two_step - one_step)
         # S-K < Vfwd + opt -> Vfwd * opt * (1 + lambd)
         # S-K > Vfwd + opt -> then this is S-K * (1 + lambd) - lambd * Vfd
         # want: S-K > Vfwd + (1 + lambd)*opt -> S-K
@@ -329,7 +331,7 @@ def value_black_scholes(scheme='implicit'):
     error_richardson = grid[0] - analytical_prices
 
     errors = []
-    theta_range = np.linspace(0.1, 0.9, 10)
+    theta_range = np.linspace(0.1, 0.9, 20)
     for idx, theta in enumerate(theta_range):
         analytical_prices = np.empty_like(spot_axis)
         for idy, s in enumerate(spot_axis):
@@ -354,7 +356,7 @@ def value_black_scholes(scheme='implicit'):
             err_diff = error_simple - errors[idx]
             rel_err_diff = err_diff / errors[idx]
             rel_err_diff = errors[idx]
-            # ax2.plot(spot_axis[plt_min:plt_max], rel_err_diff[plt_min:plt_max], label=rf'GJ $(\theta={theta:.2f})$', color=colors[idx])
+            ax2.plot(spot_axis[plt_min:plt_max], rel_err_diff[plt_min:plt_max], label=rf'GJ $(\theta={theta:.2f})$', color=colors[idx])
         # ax2.plot(spot_axis[plt_min:plt_max], errors_sev[plt_min:plt_max], label='Error Severin', color="gray")
 
         ax2.set_ylabel("Error")
