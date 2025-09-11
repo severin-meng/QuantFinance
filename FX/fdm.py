@@ -1,3 +1,4 @@
+from enum import Enum
 import numpy as np
 import scipy as sc
 
@@ -5,6 +6,17 @@ from products import ExerciseType
 
 
 __all__ = ['ExplicitEulerBS', 'ImplicitEulerBS', 'CrankNicolsonBS']
+
+
+class EarlyExerciseHandler(Enum):
+    """
+    MAX is taking max of option value and payoff after the numerical step - fastest method.
+    IT is Ikonen Toivanen operator splitting. Fast, more accurate.
+    PSOR is projected successive over relaxation. Slow (iterative) method, most accurate.
+    """
+    MAX = 0
+    IT = 1
+    PSOR = 2
 
 
 class BlackScholesModel:
@@ -17,15 +29,20 @@ class BlackScholesModel:
 
 
 class FDMScheme:
-    def __init__(self, time_axis, spot_axis, model: BlackScholesModel):
+    def __init__(self, time_axis, spot_axis, model: BlackScholesModel, early_exercise_handler: EarlyExerciseHandler):
         """
         assuming uniform axes
         """
+        # TODO: Idea. Get Time Axis only for relevant dates from product - pay dates, observations etc
+        #  enrich with simulation dates for accuracy, also with dividend dates
+        # TODO: same with spot axis - enrich with barriers, strike.
         self.time_axis = time_axis
         self.spot_axis = spot_axis
         self.vol = model.vol
         self.rate_d = model.rate_d
         self.rate_f = model.rate_f  # div yield or foreign rate
+
+        self.early_exercise_handler = early_exercise_handler
 
         self.scheme = 'Base'
 
@@ -34,11 +51,11 @@ class FDMScheme:
 
 
 class ExplicitEulerBS(FDMScheme):
-    def __init__(self, time_axis, spot_axis, model):
+    def __init__(self, time_axis, spot_axis, model, early_exercise_handler=EarlyExerciseHandler.MAX):
         """
         assuming uniform axes
         """
-        super().__init__(time_axis, spot_axis, model)
+        super().__init__(time_axis, spot_axis, model, early_exercise_handler)
         self.scheme = 'Explicit'
         self.matrix = self.compute_matrix()
 
@@ -66,11 +83,11 @@ class ExplicitEulerBS(FDMScheme):
 
 
 class ImplicitEulerBS(FDMScheme):
-    def __init__(self, time_axis, spot_axis, model):
+    def __init__(self, time_axis, spot_axis, model, early_exercise_handler=EarlyExerciseHandler.MAX):
         """
         assuming uniform axes
         """
-        super().__init__(time_axis, spot_axis, model)
+        super().__init__(time_axis, spot_axis, model, early_exercise_handler)
         self.scheme = 'Implicit'
         self.matrix, self.lower, self.upper = self.compute_matrix()
         self.lu_factor = sc.linalg.lu_factor(self.matrix)
@@ -106,11 +123,11 @@ class ImplicitEulerBS(FDMScheme):
 
 
 class CrankNicolsonBS(FDMScheme):
-    def __init__(self, time_axis, spot_axis, model):
+    def __init__(self, time_axis, spot_axis, model, early_exercise_handler=EarlyExerciseHandler.MAX):
         """
         assuming uniform axes
         """
-        super().__init__(time_axis, spot_axis, model)
+        super().__init__(time_axis, spot_axis, model, early_exercise_handler)
         self.model = 'CrankNicolson'
         self.theta = 0.5  # relative weight of explicit scheme
         self.expl_matrix, self.impl_matrix, self.lower, self.upper = self.compute_matrix()
@@ -151,13 +168,17 @@ class CrankNicolsonBS(FDMScheme):
         # If Bermudan and time step is exercise: PSOR
         # else: LU decomp
         time_step = self.time_axis[time_idx]
-        if product.exercise_type == ExerciseType.AMERICAN:
-            # TODO: Toivanen Ikonen Splitting
-            raise NotImplementedError
-        elif product.is_exercise_time(time_step):
+        if product.is_exercise_time(time_step):
             payoff = product.exercise_payoff(self.spot_axis, time_step)
-            price_t[1:-1] = psor(self.impl_matrix, rhs, price_t_plus_dt[1:-1], payoff, omega=1.0, error_tolerance=1.e-6)
-            return price_t
+            if self.early_exercise_handler == EarlyExerciseHandler.MAX:
+                price_t[1:-1] = sc.linalg.lu_solve(self.lu_factor, rhs)
+                price_t = np.maximum(price_t, payoff)
+            elif self.early_exercise_handler == EarlyExerciseHandler.IT:
+                raise NotImplementedError(f"EarlyExerciseHandler '{self.early_exercise_handler}' not implemented.")
+            elif self.early_exercise_handler == EarlyExerciseHandler.PSOR:
+                price_t[1:-1] = psor(self.impl_matrix, rhs, price_t_plus_dt[1:-1], payoff, omega=1.)
+            else:
+                raise NotImplementedError(f"EarlyExerciseHandler '{self.early_exercise_handler}' not implemented.")
         else:
             price_t[1:-1] = sc.linalg.lu_solve(self.lu_factor, rhs)
         return price_t
