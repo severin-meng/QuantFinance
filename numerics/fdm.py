@@ -3,6 +3,19 @@ import numpy as np
 import scipy as sc
 
 from products import ExerciseType
+from products import EuropeanOption, BermudanOption, AmericanOption, Product
+
+TIME_ROUNDING = 10
+
+"""
+More ideas
+- rannacher smoothing: use a couple of implicit steps at discontinuities/payoff for smoother solution
+- richardson extrapolation: solve twice, once with coarser grid, subtract weighted value to improve error
+- implement toivanen ikonen splitting and PSOR for bermudan and americans
+- automatically deduce time or spot grid
+- after solving to inception, interpolate solution in spot grid to get value at spot
+- non-uniform grids? 
+"""
 
 
 __all__ = ['ExplicitEulerBS', 'ImplicitEulerBS', 'CrankNicolsonBS']
@@ -57,10 +70,13 @@ class ExplicitEulerBS(FDMScheme):
         """
         super().__init__(time_axis, spot_axis, model, early_exercise_handler)
         self.scheme = 'Explicit'
-        self.matrix = self.compute_matrix()
+        self.matrix_dct = {}
+        for time_idx in range(time_axis.shape[0] - 1):
+            dt = round(time_axis[time_idx + 1] - time_axis[time_idx], TIME_ROUNDING)
+            if dt not in self.matrix_dct:
+                self.matrix_dct[dt] = self.compute_matrix(dt)
 
-    def compute_matrix(self):
-        dt = self.time_axis[1] - self.time_axis[0]
+    def compute_matrix(self, dt):
         n = len(self.spot_axis)
         n_range = np.arange(1, n - 1)
 
@@ -75,10 +91,11 @@ class ExplicitEulerBS(FDMScheme):
         return matrix
 
     def step_backwards(self, price_t, price_t_plus_dt, time_idx, product, *args, **kwargs):
-        price_t[1:-1] = self.matrix @ price_t_plus_dt
+        dt = round(self.time_axis[time_idx + 1] - self.time_axis[time_idx], TIME_ROUNDING)
+        price_t[1:-1] = self.matrix_dct[dt] @ price_t_plus_dt
         time_step = self.time_axis[time_idx]
         if product.is_exercise_time(time_step):
-            price_t = np.maximum(price_t, product.exercise_payoff(self.spot_axis))
+            price_t[:] = np.maximum(price_t, product.exercise_payoff(self.spot_axis, time_step))
         return price_t
 
 
@@ -89,11 +106,23 @@ class ImplicitEulerBS(FDMScheme):
         """
         super().__init__(time_axis, spot_axis, model, early_exercise_handler)
         self.scheme = 'Implicit'
-        self.matrix, self.lower, self.upper = self.compute_matrix()
-        self.lu_factor = sc.linalg.lu_factor(self.matrix)
 
-    def compute_matrix(self):
-        dt = self.time_axis[1] - self.time_axis[0]
+        self.lu_factors = {}
+        self.lowers = {}
+        self.uppers = {}
+        for time_idx in range(time_axis.shape[0] - 1):
+            dt = round(time_axis[time_idx + 1] - time_axis[time_idx], TIME_ROUNDING)
+            if dt not in self.lu_factors:
+                matrix, lower, upper = self.compute_matrix(dt)
+                lu_factor = sc.linalg.lu_factor(matrix)
+                self.lu_factors[dt] = lu_factor
+                self.lowers[dt] = lower
+                self.uppers[dt] = upper
+
+        # self.matrix, self.lower, self.upper = self.compute_matrix()
+        # self.lu_factor = sc.linalg.lu_factor(self.matrix)
+
+    def compute_matrix(self, dt):
         n = len(self.spot_axis)
         n_range = np.arange(1, n - 1)
 
@@ -109,16 +138,17 @@ class ImplicitEulerBS(FDMScheme):
 
     def step_backwards(self, price_t, price_t_plus_dt, time_idx, product, *args, **kwargs):
         # upper and lower boundary are known
-        residual_vector = np.zeros(price_t.shape[1]-2)
-        residual_vector[0] = price_t[0] * self.lower
-        residual_vector[-1] = price_t[-1] * self.upper
-        price_t[1:-1] = sc.linalg.lu_solve(self.lu_factor, price_t_plus_dt[1:-1] - residual_vector)
+        dt = round(self.time_axis[time_idx + 1] - self.time_axis[time_idx], TIME_ROUNDING)
+        residual_vector = np.zeros(price_t.shape[0]-2)
+        residual_vector[0] = price_t[0] * self.lowers[dt]
+        residual_vector[-1] = price_t[-1] * self.uppers[dt]
+        price_t[1:-1] = sc.linalg.lu_solve(self.lu_factors[dt], price_t_plus_dt[1:-1] - residual_vector)
         # TODO: if AMERICAN exercise type: do ikonen toivanen splitting
         # If Bermudan and time step is exercise: PSOR
         # else: LU decomp
         time_step = self.time_axis[time_idx]
         if product.is_exercise_time(time_step):
-            price_t = np.maximum(price_t, product.exercise_payoff(self.spot_axis))
+            price_t[:] = np.maximum(price_t, product.exercise_payoff(self.spot_axis, time_step))
         return price_t
 
 
@@ -130,11 +160,26 @@ class CrankNicolsonBS(FDMScheme):
         super().__init__(time_axis, spot_axis, model, early_exercise_handler)
         self.model = 'CrankNicolson'
         self.theta = 0.5  # relative weight of explicit scheme
-        self.expl_matrix, self.impl_matrix, self.lower, self.upper = self.compute_matrix()
-        self.lu_factor = sc.linalg.lu_factor(self.impl_matrix)
 
-    def compute_matrix(self):
-        dt = self.time_axis[1] - self.time_axis[0]
+        # self.expl_matrix, self.impl_matrix, self.lower, self.upper = self.compute_matrix()
+        # self.lu_factor = sc.linalg.lu_factor(self.impl_matrix)
+        self.expl_matrices = {}
+        self.impl_matrices = {}
+        self.lowers = {}
+        self.uppers = {}
+        self.lu_factors = {}
+        for time_idx in range(time_axis.shape[0] - 1):
+            dt = round(time_axis[time_idx + 1] - time_axis[time_idx], TIME_ROUNDING)
+            if dt not in self.lu_factors:
+                expl_matrix, impl_matrix, lower, upper = self.compute_matrix(dt)
+                lu_factor = sc.linalg.lu_factor(impl_matrix)
+                self.lu_factors[dt] = lu_factor
+                self.lowers[dt] = lower
+                self.uppers[dt] = upper
+                self.expl_matrices[dt] = expl_matrix
+                self.impl_matrices[dt] = impl_matrix
+
+    def compute_matrix(self, dt):
         n = len(self.spot_axis)
         n_range = np.arange(1, n - 1)
 
@@ -159,11 +204,12 @@ class CrankNicolsonBS(FDMScheme):
         return expl_matrix, impl_matrix, lower_residual, upper_residual
 
     def step_backwards(self, price_t, price_t_plus_dt, time_idx, product, omega=0.1, sor=False):
+        dt = round(self.time_axis[time_idx + 1] - self.time_axis[time_idx], TIME_ROUNDING)
         residual_vector = np.zeros(price_t.shape[0] - 2)
         # TODO: implement clamping of residual vector here?
-        residual_vector[0] = price_t[0] * self.lower
-        residual_vector[-1] = price_t[-1] * self.upper
-        rhs = self.expl_matrix @ price_t_plus_dt - residual_vector
+        residual_vector[0] = price_t[0] * self.lowers[dt]
+        residual_vector[-1] = price_t[-1] * self.uppers[dt]
+        rhs = self.expl_matrices[dt] @ price_t_plus_dt - residual_vector
         # TODO: if AMERICAN exercise type: do ikonen toivanen splitting
         # If Bermudan and time step is exercise: PSOR
         # else: LU decomp
@@ -171,16 +217,16 @@ class CrankNicolsonBS(FDMScheme):
         if product.is_exercise_time(time_step):
             payoff = product.exercise_payoff(self.spot_axis, time_step)
             if self.early_exercise_handler == EarlyExerciseHandler.MAX:
-                price_t[1:-1] = sc.linalg.lu_solve(self.lu_factor, rhs)
-                price_t = np.maximum(price_t, payoff)
+                price_t[1:-1] = sc.linalg.lu_solve(self.lu_factors[dt], rhs)
+                price_t[:] = np.maximum(price_t, payoff)
             elif self.early_exercise_handler == EarlyExerciseHandler.IT:
                 raise NotImplementedError(f"EarlyExerciseHandler '{self.early_exercise_handler}' not implemented.")
             elif self.early_exercise_handler == EarlyExerciseHandler.PSOR:
-                price_t[1:-1] = psor(self.impl_matrix, rhs, price_t_plus_dt[1:-1], payoff, omega=1.)
+                price_t[1:-1] = psor(self.impl_matrices[dt], rhs, price_t_plus_dt[1:-1], payoff, omega=1.)
             else:
                 raise NotImplementedError(f"EarlyExerciseHandler '{self.early_exercise_handler}' not implemented.")
         else:
-            price_t[1:-1] = sc.linalg.lu_solve(self.lu_factor, rhs)
+            price_t[1:-1] = sc.linalg.lu_solve(self.lu_factors[dt], rhs)
         return price_t
 
 
@@ -230,3 +276,56 @@ def toivanen_ikonen():
     # do lu factorization
     # clamp with payoff, adjust lambda factor
     pass
+
+
+def value(prod: Product, model: BlackScholesModel, n_time, n_spot, scheme='explicit'):
+    time_axis = prod.get_time_axis(n_time)
+    n_time = time_axis.shape[0]
+    spot_axis = prod.get_spot_axis(spot, n_spot)
+    assert (spot_axis[0] < spot < spot_axis[-1])
+    # computation grid
+    grid = np.empty((n_time, n_spot))
+    # fill final and boundary conditions
+    grid[-1, :] = prod.get_final_condition(spot_axis)
+    grid[:, 0] = prod.get_lower_boundary_condition(time_axis, min(spot_axis), model)
+    grid[:, -1] = prod.get_upper_boundary_condition(time_axis, max(spot_axis), model)
+
+    if scheme == 'explicit':
+        solver = ExplicitEulerBS(time_axis, spot_axis, model)
+    elif scheme == 'implicit':
+        solver = ImplicitEulerBS(time_axis, spot_axis, model)
+    elif scheme == 'crank-nicolson':
+        solver = CrankNicolsonBS(time_axis, spot_axis, model)
+    else:
+        raise NotImplementedError(f"FDM scheme {scheme} not implemented.")
+
+    for j in range(0, n_time-1)[::-1]:
+        solver.step_backwards(grid[j, :], grid[j+1, :], j, prod)
+
+    # now, grid[0, :] has solution on spot grid
+    prev_spot = spot_axis[0]
+    for i, spot_i in enumerate(spot_axis):
+        if spot_i == spot:
+            return grid[0, i]
+        if spot_i > spot:
+            # linear interpolation of solution on spot grid
+            return grid[0, i-1] + (spot - prev_spot) * (grid[0, i] - grid[0, i-1]) / (spot_i - prev_spot)
+        prev_spot = spot_i
+    raise ValueError("Failed to interpolate solution.")
+
+
+if __name__ == "__main__":
+    vol = 0.3
+    rate = 0.05
+    spot = 100.
+    strikes = np.array([100., 120., 140.])
+    exercise_dates = np.array([0.5, 1.0, 2.0])
+    prod = BermudanOption(strikes, exercise_dates, True)
+    european = EuropeanOption(140., 2.0, True)
+    model = BlackScholesModel(vol, rate, 0.0)
+    n_time = 4000
+    n_spot = 1000
+    european_val = value(european, model, n_time, n_spot, scheme='implicit')
+    print(european_val)
+    bermudan_value = value(prod, model, n_time, n_spot, scheme='implicit')
+    print(bermudan_value)

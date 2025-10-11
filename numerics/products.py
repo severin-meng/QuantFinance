@@ -22,7 +22,7 @@ class Product:
         return np.linspace(t_start, self.expiry, n_time)
 
     def get_spot_axis(self, spot, n_spots, min_spot=0):
-        np.linspace(min_spot, self.spot_scale * spot, n_spots)
+        return np.linspace(min_spot, self.spot_scale * spot, n_spots)
 
     def is_exercise_time(self, time):
         raise NotImplementedError
@@ -48,7 +48,7 @@ class EuropeanOption(Product):
     def is_exercise_time(self, time):
         return False
 
-    def get_final_condition(self, spot_axis, model):
+    def get_final_condition(self, spot_axis):
         if self.is_call:
             return np.maximum(spot_axis - self.strike, 0)
         return np.maximum(self.strike - spot_axis, 0)
@@ -64,7 +64,10 @@ class EuropeanOption(Product):
         return self.strike * np.exp(-model.rate * (self.tte - time_axis)) - min_spot * np.exp(-model.div_yield * (self.tte - time_axis))
 
     def exercise_payoff(self, spot_axis, time):
-        return spot_axis - self.strike if self.is_call else self.strike - spot_axis
+        if time == self.tte:
+            return spot_axis - self.strike if self.is_call else self.strike - spot_axis
+        else:
+            return np.zeros_like(spot_axis)
 
     def analytical_price(self, spot,  model):
         sqrt_tte = np.sqrt(self.tte)
@@ -90,7 +93,28 @@ class BermudanOption(Product):
     def is_exercise_time(self, time):
         return time in self.exercise_dates
 
-    def get_final_condition(self, spot_axis, model):
+    def get_time_axis(self, n_time, t_start=0):
+        max_dt = (self.expiry - t_start) / n_time
+        min_dt = 1.e-10
+        time_axis = [t_start]
+        t_current = t_start
+        exercise_idx = 0
+        while exercise_idx < len(self.exercise_dates):
+            next_exercise = self.exercise_dates[exercise_idx]
+            t_current = time_axis[-1]
+            if next_exercise - t_current > max_dt:
+                # need to insert time steps
+                add_n_steps = int((next_exercise - t_current) / max_dt - 1.e-16) + 1
+                dt = (next_exercise - t_current) / add_n_steps
+                t = t_current + dt
+                while t < next_exercise - min_dt:
+                    time_axis.append(t)
+                    t += dt
+            time_axis.append(next_exercise)
+            exercise_idx += 1
+        return np.array(time_axis)
+
+    def get_final_condition(self, spot_axis):
         if self.is_call:
             return np.maximum(spot_axis - self.strikes[-1], 0)
         return np.maximum(self.strikes[-1] - spot_axis, 0)
@@ -125,7 +149,7 @@ class AmericanOption(Product):
     def is_exercise_time(self, time):
         return time <= self.expiry
 
-    def get_final_condition(self, spot_axis, model):
+    def get_final_condition(self, spot_axis):
         if self.is_call:
             return np.maximum(spot_axis - self.strike, 0)
         return np.maximum(self.strike - spot_axis, 0)
@@ -157,7 +181,7 @@ class FlexibleForward(Product):
     def is_exercise_time(self, time):
         return time < self.expiry
 
-    def get_final_condition(self, spot_axis, model):
+    def get_final_condition(self, spot_axis):
         return spot_axis - self.strike
 
     def get_upper_boundary(self, time_axis, max_spot, model):
