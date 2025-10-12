@@ -188,9 +188,9 @@ class CrankNicolsonBS(FDMScheme):
         c_n = 0.5 * (self.vol ** 2 * n_range ** 2 + (self.rate_d - self.rate_f) * n_range) * dt
         # explicit part
         expl_matrix = np.zeros((n - 2, n))  # n-2 rows, n columns: columns are known, rows unknowns
-        expl_matrix[:, :-2] = + np.diag(self.theta * a_n)
+        expl_matrix[:, :-2] += np.diag(self.theta * a_n)
         expl_matrix[:, 1:-1] += np.diag(1 - b_n * self.theta)
-        expl_matrix[:, :-2] = + np.diag(self.theta * c_n)
+        expl_matrix[:, 2:] += np.diag(self.theta * c_n)
 
         # implicit matrix
         impl_matrix = np.zeros((n - 2, n - 2))
@@ -209,7 +209,7 @@ class CrankNicolsonBS(FDMScheme):
         # TODO: implement clamping of residual vector here?
         residual_vector[0] = price_t[0] * self.lowers[dt]
         residual_vector[-1] = price_t[-1] * self.uppers[dt]
-        rhs = self.expl_matrices[dt] @ price_t_plus_dt - residual_vector
+        rhs = (self.expl_matrices[dt] @ price_t_plus_dt) - residual_vector
         # TODO: if AMERICAN exercise type: do ikonen toivanen splitting
         # If Bermudan and time step is exercise: PSOR
         # else: LU decomp
@@ -322,10 +322,16 @@ if __name__ == "__main__":
     exercise_dates = np.array([0.5, 1.0, 2.0])
     prod = BermudanOption(strikes, exercise_dates, True)
     european = EuropeanOption(140., 2.0, True)
+    american = AmericanOption(140., 2.0, False)
     model = BlackScholesModel(vol, rate, 0.0)
-    n_time = 4000
-    n_spot = 1000
-    european_val = value(european, model, n_time, n_spot, scheme='implicit')
-    print(european_val)
-    bermudan_value = value(prod, model, n_time, n_spot, scheme='implicit')
-    print(bermudan_value)
+    n_time = 10_000
+    n_spot = 100
+    schemes = ['explicit', 'implicit', 'crank-nicolson']
+    for scheme in schemes:
+        print(f"Scheme: {scheme}")
+        european_val = value(european, model, n_time, n_spot, scheme=scheme)
+        print(f"European: {european_val}")
+        bermudan_value = value(prod, model, n_time, n_spot, scheme=scheme)
+        print(f"Bermudan: {bermudan_value}")
+        american_value = value(american, model, n_time, n_spot, scheme=scheme)
+        print(f"American: {american_value}")
