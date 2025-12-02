@@ -449,7 +449,7 @@ def hash_owen_main(fn="fiftysobol.col", m=8, s=5, M=32):
     n = 1 << m
     ans = np.zeros((n, s))
 
-    # Scrambled bits via nested uniform scramble
+    # Scrambled bits via hash-based owen scramble
     newbits = hash_owen(fn=fn, m=m, s=s, M=M)  # shape (n, s, M)
 
     # Convert bit vectors to uniforms
@@ -484,20 +484,53 @@ def hash_owen(fn="fiftysobol.col", m=8, s=5, M=32):
     n = 1 << m
 
     # laine-karras hash: apply hash per dimension
-    perms = bits_to_int(np.random.randint(0, 2, (s, M))).astype(np.uint32)
+    perms_1 = bits_to_int(np.random.randint(0, 2, (s, M))).astype(np.uint32)
+    perms_2 = bits_to_int(np.random.randint(0, 2, (s, M))).astype(np.uint32)
     for k in range(s):
         sobol_ints_rev = bits_to_int(thebits[:, k, :]).astype(np.uint32)  # these are now bit-reversed!
         # sobol_ints_rev = reverse32(sobol_ints_rev)
-        sobol_ints_rev *= 0x788aeeed
-        sobol_ints_rev ^= (sobol_ints_rev * 0x41506a02)
-        sobol_ints_rev = sobol_ints_rev + perms[None, k]  # add seed
-        sobol_ints_rev = sobol_ints_rev * (perms[None, k] | 1)  # multiply with odd seed
-        sobol_ints_rev ^= sobol_ints_rev * 0x7483dc64
-        output_ints = reverse32(sobol_ints_rev)
+        sobol_ints_rev = psychopath_hash_original(sobol_ints_rev, perms_1[k], perms_2[k])
+        # output_ints = reverse32(sobol_ints_rev)
         for j in range(n):
-            newbits[j, k, :] = int_to_bits(output_ints[j])
+            newbits[j, k, :] = int_to_bits(sobol_ints_rev[j])
         # newbits[:, k, :] = (thebits[:, k, :] + perms[None, k, :]) % 2
     return newbits
+
+
+def brent_burley_hash(sobol_ints, seed1, seed2):
+    """
+    laine-karras type hashing without bit reversal steps
+    """
+    sobol_ints += seed1
+    sobol_ints ^= sobol_ints * 0x6c50b47c
+    sobol_ints ^= sobol_ints * 0xb82f1e52
+    sobol_ints ^= sobol_ints * 0xc7afe638
+    sobol_ints ^= sobol_ints * 0x8d22f6e6
+    return sobol_ints
+
+
+def psychopath_hash_original(sobol_ints, seed1, seed2):
+    """
+    laine-karras type hashing without bit reversal steps
+    """
+    sobol_ints *= 0x788aeeed
+    sobol_ints ^= (sobol_ints * 0x41506a02)
+    sobol_ints = sobol_ints + seed1  # add seed
+    sobol_ints *= (seed2 | 1)  # multiply with odd seed
+    sobol_ints ^= sobol_ints * 0x7483dc64
+    return sobol_ints
+
+
+def psychopath_hash_final(sobol_ints, seed1, seed2):
+    """
+    laine-karras type hashing without bit reversal steps
+    """
+    sobol_ints ^= sobol_ints * 0x3d20adea
+    sobol_ints += seed1
+    sobol_ints *= (seed2 | 1)  # multiply with odd seed
+    sobol_ints ^= sobol_ints * 0x05526c56
+    sobol_ints ^= sobol_ints * 0x53a22864
+    return sobol_ints
 
 
 def sobolpts(fn="fiftysobol.col", m=8, s=2, M=32):
@@ -528,8 +561,6 @@ def sobolpts(fn="fiftysobol.col", m=8, s=2, M=32):
             ans[i, j] = bits_to_unif(bitsj)
 
     return ans
-
-
 
 
 # Below are functions to test whether things are going right
@@ -726,8 +757,8 @@ def verify_lhs(mset=range(3, 13), s=1000, type="nestu", verbose=True):
 
 
 if __name__ == "__main__":
-    # testrate(type="mato")
-    res = rsobol(type="hash-owen")
-    print(res)
+    testrate(type="hash-owen")
+    # res = rsobol(type="hash-owen")
+    # print(res)
 
 
