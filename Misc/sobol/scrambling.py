@@ -70,6 +70,18 @@ import numpy as np
 import pandas as pd
 
 
+class SobolGen:
+    def __init__(self, dim, scramble=None, bits=32, seed=20251202):
+        self.dim = dim
+        self.scramble = scramble
+        self.rand = self.scramble is not None
+        self.bits = bits
+        self.seed = seed
+
+    def random_base2(self, log2_nbr_samples):
+        return rsobol(fn="sobol_Cs.col", m=log2_nbr_samples, s=self.dim, rand=self.rand, type=self.scramble, M=self.bits, seed=self.seed)
+
+
 def rsobol(fn="fiftysobol.col", m=10, s=5, rand=True, type="nestu", M=32, seed=20171215):
     """
     Scramble Sobol' points using either:
@@ -112,12 +124,19 @@ def rsobol(fn="fiftysobol.col", m=10, s=5, rand=True, type="nestu", M=32, seed=2
         return owen_main(fn=fn, m=m, s=s, M=M)
 
     # hash-based owen scrambling
-    if type == "hash-owen":
-        return hash_owen_main(fn=fn, m=m, s=s, M=M)
+    if type == "hash-owen-bb":
+        # hash-based owen using brent-burley hash
+        return hash_owen_main(fn=fn, m=m, s=s, M=M, hash='bb')
+    if type == "hash-owen-alt":
+        # hash-based owen using psychopath v1 hash
+        return hash_owen_main(fn=fn, m=m, s=s, M=M, hash='alt')
+    if type == "hash-owen-final":
+        # hash-based owen using psychopath final hash
+        return hash_owen_main(fn=fn, m=m, s=s, M=M, hash='final')
 
     else:
         raise ValueError(f"Unknown scramble type: {type}. "
-                         "Available options: bit-shift, nestu, mato, hash-owen")
+                         "Available options: bit-shift, nestu, mato, hash-owen-bb, hash-owen-alt, hash-owen-final")
 
 
 
@@ -436,7 +455,7 @@ def bit_shift(fn="fiftysobol.col", m=8, s=5, M=32):
     return newbits
 
 
-def hash_owen_main(fn="fiftysobol.col", m=8, s=5, M=32):
+def hash_owen_main(fn="fiftysobol.col", m=8, s=5, M=32, hash='bb'):
     """
     simple bit shift scrambled sobol
     m: 2**m points
@@ -450,7 +469,7 @@ def hash_owen_main(fn="fiftysobol.col", m=8, s=5, M=32):
     ans = np.zeros((n, s))
 
     # Scrambled bits via hash-based owen scramble
-    newbits = hash_owen(fn=fn, m=m, s=s, M=M)  # shape (n, s, M)
+    newbits = hash_owen(fn=fn, m=m, s=s, M=M, hash=hash)  # shape (n, s, M)
 
     # Convert bit vectors to uniforms
     for i in range(n):
@@ -469,12 +488,15 @@ def reverse32(x):
     return x & 0xFFFFFFFF
 
 
-def hash_owen(fn="fiftysobol.col", m=8, s=5, M=32):
+def hash_owen(fn="fiftysobol.col", m=8, s=5, M=32, hash='bb'):
     """
     apply hash-based owen scrambling to sobol bits in reverse order
     """
     if m < 1:
         raise ValueError("We need m >= 1")
+
+    hash_func_dct = {'bb': brent_burley_hash, 'alt': psychopath_hash_original, 'final': psychopath_hash_final}
+    assert hash in hash_func_dct
 
     # thebits: shape (n, s, M)
     # 1. get all sobol uint32, convert to bits
@@ -489,9 +511,10 @@ def hash_owen(fn="fiftysobol.col", m=8, s=5, M=32):
     for k in range(s):
         sobol_ints_rev = bits_to_int(thebits[:, k, :]).astype(np.uint32)  # these are now bit-reversed!
         # sobol_ints_rev = reverse32(sobol_ints_rev)
-        sobol_ints_rev = psychopath_hash_original(sobol_ints_rev, perms_1[k], perms_2[k])
+        sobol_ints_rev = hash_func_dct[hash](sobol_ints_rev, perms_1[k], perms_2[k])
         # output_ints = reverse32(sobol_ints_rev)
         for j in range(n):
+            # TODO: speed this up
             newbits[j, k, :] = int_to_bits(sobol_ints_rev[j])
         # newbits[:, k, :] = (thebits[:, k, :] + perms[None, k, :]) % 2
     return newbits
