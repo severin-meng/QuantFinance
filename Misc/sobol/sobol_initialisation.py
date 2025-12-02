@@ -15,9 +15,6 @@ for deg in range(2, 28):
     cumulative_counts.append(total)
 
 
-
-
-
 def get_polynomial_degree_from_dim(dim):
     if dim == 1:
         return '01'
@@ -33,6 +30,8 @@ def get_polynomial_degree_from_dim(dim):
         return '06'
     elif dim <= 36:
         return '07'
+    else:
+        raise ValueError('invalid dimension')
 
 
 random.seed(42)
@@ -162,9 +161,11 @@ def get_direction_numbers(maxDim=3):
 
 
 if __name__ == '__main__':
+
     dir_nbrs = get_direction_numbers(maxDim=21201)
-    dir_nrbs_reshaped = list(map(list, zip(*dir_nbrs)))
-    for ctr, bit_nbrs in enumerate(dir_nrbs_reshaped):
+    dir_nbrs_reshaped = list(map(list, zip(*dir_nbrs)))
+    print(dir_nbrs_reshaped.shape)
+    for ctr, bit_nbrs in enumerate(dir_nbrs_reshaped):
         count = len(bit_nbrs)
         print(ctr+1, count)
         """
@@ -172,4 +173,5 @@ if __name__ == '__main__':
         with open(rf'{out_path}\direction_nbrs_{ctr+1}.txt', 'w') as file:
             count = len(bit_nbrs)
             print(count)
-            file.write(str(bit_nbrs)[1:-1])"""
+            file.write(str(bit_nbrs)[1:-1])
+    """
