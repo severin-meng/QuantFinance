@@ -109,6 +109,40 @@ class Bermudan:
         return max(self.strikes[-1] - scen.path[-1], 0)
 
 
+class American:
+    def __init__(self, strike, tte, is_call):
+        self.expriy = exercise_dates[-1]
+        self.early_exercise_dates = exercise_dates[:-1]
+        self.exercise_dates = exercise_dates
+        self.is_call = is_call
+        self.strikes = strikes
+
+    def get_path_spec(self):
+        path_spec = PathSpec()
+        path_spec.spot_times = self.exercise_dates
+        path_spec.use_numeraire = [True for _ in range(len(self.exercise_dates))]
+        path_spec.discount_maturities = np.empty(len(self.exercise_dates))
+        for i in range(len(self.exercise_dates) - 1):
+            path_spec.discount_maturities[i] = self.exercise_dates[i + 1]
+        path_spec.discount_maturities[-1] = self.exercise_dates[-1]
+        return path_spec
+
+    def early_exercise_payoffs(self, scen):
+        """ if called, what is the payoff """
+        if self.is_call:
+            return np.maximum(scen.path[:-1] - self.strikes[:-1], 0)
+        return np.maximum(self.strikes[:-1] - scen.path[:-1], 0)
+
+    def spot_on_early_exercise(self, scen):
+        return scen.path[:-1]
+
+    def payoff(self, scen):
+        """ what is the cashflow if not called """
+        if self.is_call:
+            return max(scen.path[-1] - self.strikes[-1], 0)
+        return max(self.strikes[-1] - scen.path[-1], 0)
+
+
 def fit_regression(X, y, reg_param=0.0):
     # idea: solve X * beta = y given X and y
     # then use beta on new X to produce new y.

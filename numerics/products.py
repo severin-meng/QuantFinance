@@ -18,6 +18,9 @@ class Product:
         self.expiry = expiry
         self.exercise_type = exercise_type
 
+    def is_callable(self):
+        raise NotImplementedError()
+
     def get_time_axis(self, n_time, t_start=0):
         return np.linspace(t_start, self.expiry, n_time)
 
@@ -44,6 +47,9 @@ class EuropeanOption(Product):
         self.tte = tte
         self.is_call = is_call
         self.product = 'European ' + 'Call' if is_call else 'Put'
+
+    def is_callable(self):
+        return False
 
     def is_exercise_time(self, time):
         return False
@@ -89,6 +95,9 @@ class BermudanOption(Product):
         self.is_call = is_call
 
         self.product = "Bermudan " + "Call" if is_call else "Put"
+
+    def is_callable(self):
+        return True
 
     def is_exercise_time(self, time):
         return time in self.exercise_dates
@@ -145,6 +154,9 @@ class AmericanOption(Product):
         self.is_call = is_call
 
         self.product = "American " + "Call" if is_call else "Put"
+
+    def is_callable(self):
+        return True
 
     def is_exercise_time(self, time):
         return time <= self.expiry
