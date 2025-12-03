@@ -68,21 +68,46 @@
 
 import numpy as np
 import pandas as pd
+from scipy.stats import qmc
+from functools import cache
+
+SEED = 43
+rng = np.random.default_rng(seed=SEED)
+
+def reset_rng(seed):
+    global rng
+    rng = np.random.default_rng(seed=seed)
+
+
+@cache
+def draw_sobol_ints(dim, m, bits=32):
+    gen = qmc.Sobol(dim, scramble=False, bits=bits)
+    return gen.integers(0, u_bounds=1<<32, n=1<<m).astype(np.uint32)
+
+@cache
+def draw_sobol_scrambled_uniforms(dim, m, bits=32):
+    gen = qmc.Sobol(dim, scramble=True, bits=bits, rng=rng)
+    return gen.random_base2(m)
 
 
 class SobolGen:
-    def __init__(self, dim, scramble=None, bits=32, seed=20251202):
+    def __init__(self, dim, scramble=None, bits=32, seed=None):
         self.dim = dim
         self.scramble = scramble
         self.rand = self.scramble is not None
         self.bits = bits
-        self.seed = seed
 
     def random_base2(self, log2_nbr_samples):
-        return rsobol(fn="sobol_Cs.col", m=log2_nbr_samples, s=self.dim, rand=self.rand, type=self.scramble, M=self.bits, seed=self.seed)
+        return rsobol(fn="sobol_Cs.col", m=log2_nbr_samples, s=self.dim, rand=self.rand, type=self.scramble, M=self.bits)
+
+    def random(self, nbr_samples):
+        m = int(np.log2(nbr_samples))
+        if 1<<m < nbr_samples:
+            m += 1
+        return rsobol(fn="sobol_Cs.col", m=m, s=self.dim, rand=self.rand, type=self.scramble, M=self.bits)[:nbr_samples, :]
 
 
-def rsobol(fn="fiftysobol.col", m=10, s=5, rand=True, type="nestu", M=32, seed=20171215):
+def rsobol(fn="fiftysobol.col", m=10, s=5, rand=True, type="nestu", M=32):
     """
     Scramble Sobol' points using either:
       - Nested uniform scramble  ("nestu")
@@ -96,7 +121,6 @@ def rsobol(fn="fiftysobol.col", m=10, s=5, rand=True, type="nestu", M=32, seed=2
     # rand = TRUE for randomized Sobol' (the default), FALSE for original Sobol' (use with care)
     # type = nestu (for nested uniform scramble) or mato (for Matousek's linear scramble)
     # M    = number of bits to produce; must match number of columns in fn. 32 standard
-    # seed = one random seed for the whole matrix
     #
     # returns matrix in [0,1]^{n * s }of scrambled Sobol' points
     #
@@ -105,25 +129,27 @@ def rsobol(fn="fiftysobol.col", m=10, s=5, rand=True, type="nestu", M=32, seed=2
     if m > M:
         raise RuntimeError(f"Cannot deliver 2^{m} points. Max is 2^{M}-1.")
 
-    np.random.seed(seed)
-
     # Unrandomized Sobol'
     if not rand:
-        return sobolpts(fn=fn, m=m, s=s, M=M)
+        gen = qmc.Sobol(s, scramble=False, bits=M)
+        sobolpts = gen.random_base2(m)
+        # sobol_ints = gen.integers(0, u_bounds=1 << 32, n=1 << m).astype(np.uint64)
+        return sobolpts
 
-    # bit shift scramble
+    # bit shift scramble, vectorized
     if type == "bit-shift":
         return bit_shift_main(fn=fn, m=m, s=s, M=M)
 
     # Matousek scramble
     if type == "mato":
-        return matousek_main(fn=fn, m=m, s=s, M=M)
+        return draw_sobol_scrambled_uniforms(s, m)
+        # return matousek_main(fn=fn, m=m, s=s, M=M)
 
     # full owen scrambling (nested uniform)
     if type == "nestu":
         return owen_main(fn=fn, m=m, s=s, M=M)
 
-    # hash-based owen scrambling
+    # hash-based owen scrambling, all vectorized
     if type == "hash-owen-bb":
         # hash-based owen using brent-burley hash
         return hash_owen_main(fn=fn, m=m, s=s, M=M, hash='bb')
@@ -232,7 +258,7 @@ def getpermset2(J):
     for j in range(1, J + 1):
         length = 1 << (j - 1)  # length = 2^(j-1)
         # runif(...) > 1/2  →  Bernoulli(0.5)
-        vec = (np.random.rand(length) > 0.5).astype(int)
+        vec = rng.integers(0, 2, length, dtype=int)
         ans.append(vec)
 
     return ans
@@ -245,7 +271,7 @@ def owen_main(fn="fiftysobol.col", m=10, s=5, M=32):
     M: bits, 32 default
     """
     if m == 0:
-        return np.random.rand(1, s)
+        return rng.random(size=(1, s))# np.random.rand(1, s)
 
     n = 1 << m
     ans = np.zeros((n, s))
@@ -320,7 +346,8 @@ def owen_bits(fn="fiftysobol.col", m=10, s=5, M=32):
     # why? Because we have no bits past m, each series of m bits is unique - no repetitions
     # so the distributions no longer share common bit sequences. This means it is still a nested uniform sample
     if M > m:
-        rnd = (np.random.rand(n, s, M - m) > 0.5).astype(int)
+        rnd = rng.integers(0, 2, size=(n, s, M-m))
+        # rnd = (np.random.rand(n, s, M - m) > 0.5).astype(int)
         newbits[:, :, m:M] = rnd
 
     # in practice, I want to loop over the length of the sequence, do all dimensions and bits at once
@@ -344,12 +371,15 @@ def get_matousek2(J):
     M = np.eye(J, dtype=int)
 
     # C = Bernoulli(0.5)
-    C = (np.random.rand(J) > 0.5).astype(int)
+    # C = (np.random.rand(J) > 0.5).astype(int)
+    C = rng.integers(0, 2, J)
 
     # Fill lower-triangular entries
     for i in range(1, J):
-        for j in range(i):
-            M[i, j] = int(np.random.rand() > 0.5)
+        M[i, :i] = rng.integers(0, 2, i)
+        # for j in range(i):
+            # M[i, j] = int(np.random.rand() > 0.5)
+
 
     return {"M": M, "C": C}
 
@@ -387,7 +417,8 @@ def rsobolbits_mato(fn="fiftysobol.col", m=10, s=5, M=32):
 
     # fill remaining bits with random Bernoulli(0.5)
     if M > m:
-        rnd = (np.random.rand(n, s, M - m) > 0.5).astype(int)
+        rnd = rng.integers(0, 2, size=(n, s, M-m))
+        # rnd = (np.random.rand(n, s, M - m) > 0.5).astype(int)
         newbits[:, :, m:M] = rnd
 
     return newbits
@@ -395,7 +426,8 @@ def rsobolbits_mato(fn="fiftysobol.col", m=10, s=5, M=32):
 
 def matousek_main(fn="fiftysobol.col",m=8,s=5,M=32):
     if m == 0:
-        return np.random.rand(1, s)
+        return rng.random(size=(1, s))
+        # return np.random.rand(1, s)
     n = 1 << m
     ans = np.zeros((n, s))
 
@@ -418,20 +450,24 @@ def bit_shift_main(fn="fiftysobol.col",m=8,s=5,M=32):
     M: bits, 32 default
     """
     if m == 0:
-        return np.random.rand(1, s)
+        return rng.random(size=(1, s))
+        # return np.random.rand(1, s)
 
     n = 1 << m
     ans = np.zeros((n, s))
 
     # Scrambled bits via nested uniform scramble
-    newbits = bit_shift(fn=fn, m=m, s=s, M=M)  # shape (n, s, M)
-
+    # newbits = bit_shift(fn=fn, m=m, s=s, M=M)  # shape (n, s, M)
+    new_ints = bit_shift(fn=fn, m=m, s=s, M=M)  # shape (n, s, M)
+    """
     # Convert bit vectors to uniforms
     for i in range(n):
         for j in range(s):
             ans[i, j] = bits_to_unif(newbits[i, j])
 
     return ans
+    """
+    return new_ints / (1 << 32)
 
 
 def bit_shift(fn="fiftysobol.col", m=8, s=5, M=32):
@@ -444,15 +480,21 @@ def bit_shift(fn="fiftysobol.col", m=8, s=5, M=32):
     # thebits: shape (n, s, M)
     # 1. get all sobol uint32, convert to bits
     # shape: 2^m nbrs, s dims, M bits
-    thebits = sobolbits(fn, m, s, M)
-    newbits = thebits.copy()
+    # thebits = sobolbits(fn, m, s, M)
+    # gen = qmc.Sobol(s, scramble=False, bits=32)
+    # sobol_ints = gen.integers(0, u_bounds=1<<32, n=1<<m).astype(np.uint32)
+    sobol_ints = draw_sobol_ints(s, m)
+    # newbits = thebits.copy()
 
     # bit-shift: get one permutation per dimension, XOR it for all elements in the sequence
-    perms =  (np.random.randint(0, 2, (s, M)))
+    # perms =  np.random.randint(0, 1<<32, s).astype(np.uint32)
+    perms = rng.integers(0, 1<<32, s, dtype=np.uint32)
+    output_ints = sobol_ints ^ perms[None, :]
+    """
     for k in range(s):
         newbits[:, k, :] = (thebits[:, k, :] + perms[None, k, :]) % 2
-
-    return newbits
+    """
+    return output_ints
 
 
 def hash_owen_main(fn="fiftysobol.col", m=8, s=5, M=32, hash='bb'):
@@ -463,18 +505,20 @@ def hash_owen_main(fn="fiftysobol.col", m=8, s=5, M=32, hash='bb'):
     M: bits, 32 default
     """
     if m == 0:
-        return np.random.rand(1, s)
+        return rng.random(size=(1, s))
+        # return np.random.rand(1, s)
 
     n = 1 << m
-    ans = np.zeros((n, s))
 
     # Scrambled bits via hash-based owen scramble
-    newbits = hash_owen(fn=fn, m=m, s=s, M=M, hash=hash)  # shape (n, s, M)
-
+    # newbits = hash_owen(fn=fn, m=m, s=s, M=M, hash=hash)  # shape (n, s, M)
+    ans = hash_owen(fn=fn, m=m, s=s, M=M, hash=hash) / (1 << M)
+    """
     # Convert bit vectors to uniforms
     for i in range(n):
         for j in range(s):
             ans[i, j] = bits_to_unif(newbits[i, j])
+    """
 
     return ans
 
@@ -501,23 +545,28 @@ def hash_owen(fn="fiftysobol.col", m=8, s=5, M=32, hash='bb'):
     # thebits: shape (n, s, M)
     # 1. get all sobol uint32, convert to bits
     # shape: 2^m nbrs, s dims, M bits
-    thebits = sobolbits(fn, m, s, M)
-    newbits = thebits.copy()
-    n = 1 << m
+    # thebits = sobolbits(fn, m, s, M)
+    # gen = qmc.Sobol(s, scramble=False, bits=32)
+    # sobol_ints = gen.integers(0, u_bounds=1<<32, n=1<<m).astype(np.uint32)
+    sobol_ints = draw_sobol_ints(s, m)
+    # newbits = thebits.copy()
 
+    n = 1 << m
+    output_ints = np.empty((n, s), dtype=np.uint32)
     # laine-karras hash: apply hash per dimension
-    perms_1 = bits_to_int(np.random.randint(0, 2, (s, M))).astype(np.uint32)
-    perms_2 = bits_to_int(np.random.randint(0, 2, (s, M))).astype(np.uint32)
+    perms_1 = rng.integers(0, 1<<32, s, dtype=np.uint32)
+    perms_2 = rng.integers(0, 1<<32, s, dtype=np.uint32)
     for k in range(s):
-        sobol_ints_rev = bits_to_int(thebits[:, k, :]).astype(np.uint32)  # these are now bit-reversed!
+        # sobol_ints_rev = bits_to_int(thebits[:, k, :]).astype(np.uint32)  # these are now bit-reversed!
+        sobol_ints_rev = reverse32(sobol_ints[:, k])
         # sobol_ints_rev = reverse32(sobol_ints_rev)
         sobol_ints_rev = hash_func_dct[hash](sobol_ints_rev, perms_1[k], perms_2[k])
-        # output_ints = reverse32(sobol_ints_rev)
-        for j in range(n):
+        output_ints[:, k] = reverse32(sobol_ints_rev)
+        # for j in range(n):
             # TODO: speed this up
-            newbits[j, k, :] = int_to_bits(sobol_ints_rev[j])
+        #     newbits[j, k, :] = int_to_bits(sobol_ints_rev[j])
         # newbits[:, k, :] = (thebits[:, k, :] + perms[None, k, :]) % 2
-    return newbits
+    return output_ints
 
 
 def brent_burley_hash(sobol_ints, seed1, seed2):
@@ -628,7 +677,7 @@ def testrate(mset=range(5, 19), R=50, type="nestu", seed=20210120):
     for r in range(R):
         print(f"Running round {r} of {R}")
         # Generate Sobol points with maximum m
-        x = rsobol(m=max(mset), s=2, type=type, seed=seed + r)
+        x = rsobol(m=max(mset), s=2, type=type)
         # Apply g row-wise
         y = np.apply_along_axis(g, 1, x)
         # Store cumulative mean at each n=2^m
@@ -649,6 +698,7 @@ def testrate(mset=range(5, 19), R=50, type="nestu", seed=20210120):
     # Reference curves
     plt.loglog(n_values, (1/n_values**3) * varhat[0] * n_values[0]**3, 'b-', linewidth=2, label="1/n^3")
     plt.loglog(n_values, (np.log(n_values)/n_values**3) * varhat[0] * n_values[0]**3 / np.log(n_values[0]), 'r-', linewidth=2, label="log(n)/n^3")
+    plt.loglog(n_values, (1 / n_values ** 2) * varhat[0] * n_values[0] ** 2, 'g-', linewidth=2, label="1/n^2")
 
     plt.legend()
     plt.savefig(f"testrate_{type}.png")
@@ -780,7 +830,7 @@ def verify_lhs(mset=range(3, 13), s=1000, type="nestu", verbose=True):
 
 
 if __name__ == "__main__":
-    testrate(type="hash-owen")
+    testrate(type="mato")
     # res = rsobol(type="hash-owen")
     # print(res)
 
