@@ -68,6 +68,7 @@
 
 import numpy as np
 import pandas as pd
+from scipy._lib._util import IntNumber
 from scipy.stats import qmc
 from functools import cache
 
@@ -82,12 +83,14 @@ def reset_rng(seed):
 @cache
 def draw_sobol_ints(dim, m, bits=32):
     gen = qmc.Sobol(dim, scramble=False, bits=bits)
-    return gen.integers(0, u_bounds=1<<32, n=1<<m).astype(np.uint32)
+    res = gen.integers(0, u_bounds=1<<32, n=1<<m).astype(np.uint32)
+    return res
 
-@cache
+# @cache
 def draw_sobol_scrambled_uniforms(dim, m, bits=32):
     gen = qmc.Sobol(dim, scramble=True, bits=bits, rng=rng)
-    return gen.random_base2(m)
+    res = gen.random_base2(m)
+    return res
 
 
 class SobolGen:
@@ -100,7 +103,7 @@ class SobolGen:
     def random_base2(self, log2_nbr_samples):
         return rsobol(fn="sobol_Cs.col", m=log2_nbr_samples, s=self.dim, rand=self.rand, type=self.scramble, M=self.bits)
 
-    def random(self, nbr_samples):
+    def random(self, nbr_samples=1):
         m = int(np.log2(nbr_samples))
         if 1<<m < nbr_samples:
             m += 1
