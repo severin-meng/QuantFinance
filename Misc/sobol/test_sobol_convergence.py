@@ -11,7 +11,7 @@ from models import EquityModel, EquityPaths, ConstantShortRate, GBM, HestonTrunc
 from models import HestonQuadraticExponentialMartingaleCorrection, DeterministicShortRate
 from payoffs import AutocallableBRC, BRC, PathDependentProduct, WorstOfDownOutCall, WorstOfDownInPut, WorstOfPut
 from payoffs import WorstOfCall, WorstOfUpOutCall, AverageCall, FixedStrikeAsianCall, LookbackCall, Accumulator
-from payoffs import LookbackCallFixed, DigitalCall, Pathological
+from payoffs import LookbackCallFixed, DigitalCall, Pathological, SmoothAutocallableBRC, Cliquet
 
 from scrambling import reset_rng
 
@@ -19,7 +19,7 @@ from scrambling import reset_rng
 def bump_model_s1(model, dx=0.01):
     model.initial_levels[0] += dx
 
-modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological"]
+modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological", "SmoothAutocall", "Cliquet"]
 
 def get_products_models():
     strike = 1.0
@@ -30,6 +30,7 @@ def get_products_models():
     autocall_lvl = 1.0
     autocall_freq = 2
     asian_fixing_freq = 8
+    autocall_smooth = 0.01
 
     ABRC = AutocallableBRC(
         strike=strike,
@@ -39,6 +40,17 @@ def get_products_models():
         coupon_frequency=coupon_freq,
         autocall_level=autocall_lvl,
         autocall_frequency=autocall_freq)
+
+    SABRC = SmoothAutocallableBRC(
+        strike=strike,
+        expiry=expiry,
+        knock_in_level=knockin,
+        coupon_rate = coupon,
+        coupon_frequency=coupon_freq,
+        autocall_level=autocall_lvl,
+        autocall_frequency=autocall_freq,
+        smooth=autocall_smooth
+    )
 
     brc = BRC(strike=strike, expiry=expiry, knock_in_level=knockin, coupon_rate=coupon, coupon_frequency=coupon_freq)
 
@@ -63,9 +75,11 @@ def get_products_models():
 
     pathological = Pathological(strike, expiry, fixing_freq=4)
 
+    cliquet = Cliquet(expiry=expiry, fixing_freq=asian_fixing_freq)
+
     prods = {"Autocallable": ABRC, "BRC": brc, "worst_of_call": worst_of_call, "avg": avg_call, "asianGeometric": asianGeom,
              "asianArithmetic": asianArith, "dip": dip, "lookback": lookback, "accu": accu, "lookback_fix": lookback_fixed,
-             "digital": digital, "pathological": pathological}
+             "digital": digital, "pathological": pathological, "SmoothAutocall": SABRC, "Cliquet": cliquet}
 
     vols = np.array([0.3, 0.3, 0.3])
     spots = np.array([1.0, 1.0, 1.0])
@@ -93,9 +107,9 @@ def test_convergence():
     plot_points = 1 << np.array(range(3, log2_nbr_points+1))
     seed = 20251203
     nbr_variance_runs = 100
-    #           0               1       2               3       4                   5               6       7           8       9               10          11
-    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological"]
-    mode = modes[1]
+    #           0               1       2               3       4                   5               6       7           8       9               10          11          12                  13
+    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological", "SmoothAutocall", "Cliquet"]
+    mode = modes[13]
     compute_pca_full = True
     if mode == 'worst_of_call':
         model = models['multi']
@@ -123,6 +137,10 @@ def test_convergence():
         compute_pca_full = False
         model = models['single']
         freq = 12
+    elif mode == 'Cliquet':
+        compute_pca_full = False
+        model = models['single']
+        freq = 32
     elif mode == 'pathological':
         freq = 12
         compute_pca_full = True
@@ -320,7 +338,7 @@ def run_sensi_analysis():
     from scipy.special import ndtri
 
     prods, models = get_products_models()
-    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asian"]
+    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological", "SmoothAutocall"]
     mode = modes[4]
     if mode == 'asian':
         model = models['single']
@@ -441,8 +459,8 @@ def test_sensitivity():
 
 def test_pca():
     prods, models = get_products_models()
-    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological"]
-    mode = modes[11]
+    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological", "SmoothAutocall", "Cliquet"]
+    mode = modes[3]
     print(mode)
     if mode in ('asianArithmetic', 'asianGeometric'):
         model = models['single']
@@ -488,7 +506,7 @@ def test_pca():
 
 def test_digital():
     prods, models = get_products_models()
-    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological"]
+    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological", "SmoothAutocall", "Cliquet"]
     model = models['single']
     mode = modes[10]
     print(mode)
@@ -516,8 +534,124 @@ def test_digital():
     plt.show()
 
 
+def test_greeks():
+    prods, models = get_products_models()
+    modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological", "SmoothAutocall", "Cliquet"]
+    mode = modes[-1]
+    print(mode)
+    if mode in ('asianArithmetic', 'asianGeometric'):
+        model = models['single']
+        freq = 0
+    elif mode in ('lookback', 'lookback_fix'):
+        model = models['single']
+        freq = 50
+    elif mode == 'accu':
+        model = models['single']
+        freq = 0
+    elif mode == 'pathological':
+        model = models['multi']
+        freq = 12
+    else:
+        model = models['multi']
+        freq = 0
+    assert mode in prods
+    prod = prods[mode]
+
+    num_paths = 1 << 19
+    timeline = prod.simulation_times(frequency=freq)
+    path_gen = SobolPathGenerator(timeline, model.random_factors, correlation=model.correlation_matrix, path_constructor=BrownianBridge, scrambler=False)
+    paths = model.generate_paths(num_paths, path_gen, save=True, reuse=False)
+    payoffs = prod.discounted_path_payoff(paths, model.short_rate_func, is_barrier_continuous=True,
+                                          is_clean_price=False)
+    value = np.mean(payoffs)
+    print(f"BB: {value}")
+
+    # greeks
+    dx = 0.01
+
+    # rate derivative
+    model.short_rate_func.short_rate += dx
+    paths_up = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+    payoffs_up = prod.discounted_path_payoff(paths_up, model.short_rate_func, is_barrier_continuous=True,
+                                             is_clean_price=False)
+    model.short_rate_func.short_rate -= 2 * dx
+    paths_dn = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+    payoffs_dn = prod.discounted_path_payoff(paths_dn, model.short_rate_func, is_barrier_continuous=True,
+                                             is_clean_price=False)
+    model.short_rate_func.short_rate = 0.03
+    rate_delta = np.mean((payoffs_up - payoffs_dn)) / (2 * dx)
+    print(f"Rate delta: {rate_delta}")
+
+    # deltas
+    deltas = np.zeros(3)
+    for i in range(3):
+        model.initial_levels[i] += dx
+        paths_up = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+        payoffs_up = prod.discounted_path_payoff(paths_up, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.initial_levels[i] -= 2*dx
+        paths_dn = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+        payoffs_dn = prod.discounted_path_payoff(paths_dn, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.initial_levels[i] = 1.0
+        deltas[i] = np.mean((payoffs_up - payoffs_dn)) / (2 * dx)
+    print(f"Spot deltas: {deltas}")
+
+    # vegas
+    vegas = np.zeros(3)
+    for i in range(3):
+        model.vols[i] += dx
+        paths_up = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+        payoffs_up = prod.discounted_path_payoff(paths_up, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.vols[i] -= 2 * dx
+        paths_dn = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+        payoffs_dn = prod.discounted_path_payoff(paths_dn, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.vols[i] += dx
+        vegas[i] = np.mean((payoffs_up - payoffs_dn)) / (2 * dx)
+    print(f"vegas: {vegas}")
+
+    # dividend yield
+    div_yields = np.zeros(3)
+    for i in range(3):
+        model.forward_spread[i] -= dx
+        paths_up = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+        payoffs_up = prod.discounted_path_payoff(paths_up, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.forward_spread[i] += 2 * dx
+        paths_dn = model.generate_paths(num_paths, path_gen, save=False, reuse=True)
+        payoffs_dn = prod.discounted_path_payoff(paths_dn, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.forward_spread[i] -= dx
+        div_yields[i] = np.mean((payoffs_up - payoffs_dn)) / (2 * dx)
+    print(f"div yield: {div_yields}")
+
+    # correlation sensi
+    corrs = np.zeros(3)
+    corr_map = [[(1,0), (0,1)], [(2, 0), (0, 2)], [(2, 1), (1, 2)]]
+    for i in range(3):
+        idxs = corr_map[i]
+        model.correlation_matrix[idxs[0]] += dx
+        model.correlation_matrix[idxs[1]] += dx
+        paths_up = model.generate_paths(num_paths, path_gen, save=False, reuse=False, reuse_correlation=False)
+        payoffs_up = prod.discounted_path_payoff(paths_up, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.correlation_matrix[idxs[0]] -= 2 * dx
+        model.correlation_matrix[idxs[1]] -= 2 * dx
+        paths_dn = model.generate_paths(num_paths, path_gen, save=False, reuse=False, reuse_correlation=False)
+        payoffs_dn = prod.discounted_path_payoff(paths_dn, model.short_rate_func, is_barrier_continuous=True,
+                                                 is_clean_price=False)
+        model.correlation_matrix[idxs[0]] += dx
+        model.correlation_matrix[idxs[1]] += dx
+        corrs[i] = np.mean((payoffs_up - payoffs_dn)) / (2 * dx)
+    print(f"Corr sensi: {corrs}")
+
+
 if __name__ == "__main__":
     test_convergence()
+    #test_pca()
+    # test_greeks()
     # test_sensitivity()
     # run_sensi_analysis()
     # test_pca()
