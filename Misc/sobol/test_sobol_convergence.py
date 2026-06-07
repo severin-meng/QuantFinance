@@ -29,7 +29,7 @@ def get_products_models():
     coupon_freq = 4
     autocall_lvl = 1.0
     autocall_freq = 2
-    asian_fixing_freq = 8
+    asian_fixing_freq = 4
     autocall_smooth = 0.01
 
     ABRC = AutocallableBRC(
@@ -93,7 +93,7 @@ def get_products_models():
     model_m = GBM(volatilities=vols, short_rate_func=ConstantShortRate(short_rate=short_rate), correlation_matrix=corr_mat,
                 initial_levels=spots)
 
-    model_s = GBM(volatilities=np.array([0.2]), short_rate_func=ConstantShortRate(short_rate=short_rate), initial_levels=np.array([1.0]))
+    model_s = GBM(volatilities=np.array([0.3]), short_rate_func=ConstantShortRate(short_rate=short_rate), initial_levels=np.array([1.0]))
 
     models = {'multi': model_m, 'single': model_s}
     return prods, models
@@ -109,7 +109,7 @@ def test_convergence():
     nbr_variance_runs = 100
     #           0               1       2               3       4                   5               6       7           8       9               10          11          12                  13
     modes = ["Autocallable", "BRC", "worst_of_call", "avg", "asianArithmetic", "asianGeometric", "dip", "lookback", "accu", "lookback_fix", "digital", "pathological", "SmoothAutocall", "Cliquet"]
-    mode = modes[13]
+    mode = modes[4]
     compute_pca_full = True
     if mode == 'worst_of_call':
         model = models['multi']
@@ -179,7 +179,7 @@ def test_convergence():
         paths_per_pass = 1 << (log2_nbr_points_ref-5)
         nbr_pass = int(ref_num_paths / paths_per_pass)
         # path_gen = PseudoRandomPathGenerator(timeline, model.random_factors, correlation=model.correlation_matrix, seed=seed)
-        path_gen = SobolPathGenerator(timeline, model.random_factors, correlation=model.correlation_matrix, path_constructor=BrownianBridge, scrambler=False)
+        path_gen = SobolPathGenerator(timeline, model.random_factors, correlation=model.correlation_matrix, path_constructor=SpectralSplit, scrambler=False)
         ref_prc = 0
         ref_up = 0
         ref_dn = 0
